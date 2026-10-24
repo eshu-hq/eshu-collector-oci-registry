@@ -1,4 +1,4 @@
-# Standalone Jira collector image: a static pure-Go binary, built reproducibly
+# Standalone OCI registry collector image: a static pure-Go binary, built reproducibly
 # with -trimpath, on a base with no shell and no package manager. The binary is
 # its own installer: `collector seed --dest DIR` writes DIR/collector (this
 # binary, mode 0755) and DIR/manifest.yaml, so an init container can seed the

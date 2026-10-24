@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025-2026 eshu-hq
 
-// Package stableid derives the deterministic identifiers that name Jira
-// facts.
+// Package stableid derives the deterministic identifiers that name facts:
+// repository scopes, fact stable keys, and generation fingerprints.
 //
 // COPIED CODE: this is a byte-for-byte copy of the unexported-to-this-module
 // Eshu core function facts.StableID (go/internal/facts/encode/stable.go in

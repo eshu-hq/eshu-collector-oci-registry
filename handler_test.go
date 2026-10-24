@@ -253,6 +253,37 @@ func TestHandleRejectsBadConfigTerminal(t *testing.T) {
 	if result.Statuses[0].FailureClass != FailureInvalidConfig {
 		t.Fatalf("FailureClass = %q, want %q", result.Statuses[0].FailureClass, FailureInvalidConfig)
 	}
+	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
+		t.Fatalf("ValidateResult() error = %v", err)
+	}
+}
+
+// TestHandleRejectsSpentLeaseRetryable proves an already-expired lease fails
+// retryable with the claim-deadline class and no facts, in a shape the host
+// validator accepts.
+func TestHandleRejectsSpentLeaseRetryable(t *testing.T) {
+	t.Parallel()
+
+	claim := handlerClaim()
+	claim.Deadline = parityObservedAt.Add(-time.Minute).UTC()
+	result, err := handlerWith(fullHandlerClient(t)).Handle(context.Background(), Request{
+		ProtocolVersion: sdk.ProtocolVersionV1Alpha1,
+		Claim:           claim,
+		Contract:        Contract(),
+		Config:          handlerTargetConfig(),
+	})
+	if err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if result.State != sdk.ResultRetryable || result.Statuses[0].FailureClass != FailureClaimDeadline {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(result.Facts) != 0 {
+		t.Fatal("retryable result carries facts")
+	}
+	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
+		t.Fatalf("ValidateResult() error = %v", err)
+	}
 }
 
 // TestHandleMapsRegistryFailuresToRetryableOrTerminal proves the host-facing
@@ -278,6 +309,9 @@ func TestHandleMapsRegistryFailuresToRetryableOrTerminal(t *testing.T) {
 	if result.Statuses[0].FailureClass != regfail.RegistryFailureAuthDenied {
 		t.Fatalf("FailureClass = %q, want %q", result.Statuses[0].FailureClass, regfail.RegistryFailureAuthDenied)
 	}
+	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
+		t.Fatalf("ValidateResult(denied) error = %v", err)
+	}
 
 	unavailable := &stubRegistryClient{pingErr: regfail.RegistryHTTPFailure("oci", "", "ping", 500, httpx.HTTPError{
 		Provider: "oci", StatusCode: 500, Message: "Internal Server Error", Operation: "ping",
@@ -296,6 +330,9 @@ func TestHandleMapsRegistryFailuresToRetryableOrTerminal(t *testing.T) {
 	}
 	if result.Statuses[0].RetryAfterSeconds <= 0 {
 		t.Fatal("retryable result has no retry guidance")
+	}
+	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
+		t.Fatalf("ValidateResult(unavailable) error = %v", err)
 	}
 }
 

@@ -105,18 +105,11 @@ func (s *Source) Next(ctx context.Context) (ScanResult, bool, error) {
 	return ScanResult{}, false, nil
 }
 
-func (s *Source) scanTarget(ctx context.Context, config Config, target TargetConfig, generationID string) (_ ScanResult, scanErr error) {
+func (s *Source) scanTarget(ctx context.Context, config Config, target TargetConfig, generationID string) (ScanResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ScanResult{}, err
 	}
 	start := time.Now()
-	result := "success"
-	defer func() {
-		if result == "failed" {
-			result = scanFailureResult(ctx, scanErr)
-		}
-		_ = result
-	}()
 
 	client, err := s.ClientFactory.Client(ctx, target)
 	if err != nil {

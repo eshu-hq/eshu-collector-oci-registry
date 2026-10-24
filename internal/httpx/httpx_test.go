@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var jiraLikePolicy = StatusPolicy{
+var registryLikePolicy = StatusPolicy{
 	AuthDeniedClass: FailurePermissionHidden,
 	NotFoundClass:   FailureDeleted,
 	GoneClass:       FailureArchived,
@@ -46,7 +46,7 @@ func TestClassifyStatusFollowsThePolicy(t *testing.T) {
 		{302, FailureRetryable, false},
 	}
 	for _, tc := range cases {
-		got := jiraLikePolicy.ClassifyStatus(tc.status)
+		got := registryLikePolicy.ClassifyStatus(tc.status)
 		if got.Class != tc.class || got.Terminal != tc.terminal {
 			t.Errorf("status %d = %+v, want %s terminal=%v", tc.status, got, tc.class, tc.terminal)
 		}
@@ -66,25 +66,25 @@ func TestClassifyStatusFollowsThePolicy(t *testing.T) {
 func TestClassifyProviderFailure(t *testing.T) {
 	t.Parallel()
 
-	rate := HTTPError{Provider: "jira", StatusCode: 429, RetryAfter: 9 * time.Second, Operation: "search_issues"}
-	failure := ClassifyProviderFailure("jira", rate, jiraLikePolicy, FailureRetryable)
-	if failure.FailureClass() != "rate_limited" || failure.TerminalFailure() || failure.RetryAfterDelay() != 9*time.Second || failure.FailureOperation() != "search_issues" {
+	rate := HTTPError{Provider: "oci", StatusCode: 429, RetryAfter: 9 * time.Second, Operation: "list_tags"}
+	failure := ClassifyProviderFailure("oci", rate, registryLikePolicy, FailureRetryable)
+	if failure.FailureClass() != "rate_limited" || failure.TerminalFailure() || failure.RetryAfterDelay() != 9*time.Second || failure.FailureOperation() != "list_tags" {
 		t.Fatalf("rate-limit failure = %+v", failure)
 	}
 	for name, err := range map[string]error{
 		"canceled": context.Canceled, "deadline": fmt.Errorf("wrap: %w", context.DeadlineExceeded),
-		"transport": HTTPError{Provider: "jira", Message: "request failed", Cause: errors.New("dial tcp")},
+		"transport": HTTPError{Provider: "oci", Message: "request failed", Cause: errors.New("dial tcp")},
 	} {
-		got := ClassifyProviderFailure("jira", err, jiraLikePolicy, FailureRetryable)
+		got := ClassifyProviderFailure("oci", err, registryLikePolicy, FailureRetryable)
 		if got.FailureClass() != "retryable" || got.TerminalFailure() {
 			t.Errorf("%s classified as %s terminal=%v, want retryable", name, got.FailureClass(), got.TerminalFailure())
 		}
 	}
-	if got := ClassifyProviderFailure("jira", errors.New("other"), jiraLikePolicy, FailureTerminal); !got.TerminalFailure() {
+	if got := ClassifyProviderFailure("oci", errors.New("other"), registryLikePolicy, FailureTerminal); !got.TerminalFailure() {
 		t.Error("a terminal fallback must be terminal")
 	}
-	already := NewProviderFailure("jira", FailureArchived, true, errors.New("x"))
-	if got := ClassifyProviderFailure("jira", fmt.Errorf("wrapped: %w", already), jiraLikePolicy, FailureRetryable); got.FailureClass() != "archived" {
+	already := NewProviderFailure("oci", FailureArchived, true, errors.New("x"))
+	if got := ClassifyProviderFailure("oci", fmt.Errorf("wrapped: %w", already), registryLikePolicy, FailureRetryable); got.FailureClass() != "archived" {
 		t.Errorf("an existing ProviderFailure must pass through, got %s", got.FailureClass())
 	}
 }
@@ -92,8 +92,8 @@ func TestClassifyProviderFailure(t *testing.T) {
 func TestProviderFailureTextIsBounded(t *testing.T) {
 	t.Parallel()
 
-	cause := HTTPError{Provider: "jira", StatusCode: 401, Message: "bot@fixture.invalid token=abc"}
-	failure := NewProviderFailure("jira", FailurePermissionHidden, true, cause)
+	cause := HTTPError{Provider: "oci", StatusCode: 401, Message: "bot@fixture.invalid token=abc"}
+	failure := NewProviderFailure("oci", FailurePermissionHidden, true, cause)
 	for _, text := range []string{failure.Error(), cause.Error(), fmt.Sprint(failure)} {
 		if strings.Contains(text, "token") || strings.Contains(text, "bot@") {
 			t.Fatalf("error text leaks provider content: %q", text)
@@ -111,7 +111,7 @@ func TestSanitizeOperationKeepsOnlyABoundedToken(t *testing.T) {
 	cases := map[string]string{
 		"":                              "",
 		"  ":                            "",
-		"search_issues":                 "search_issues",
+		"list_tags":                 "list_tags",
 		"Read Changelog":                "read_changelog",
 		"https://x.invalid/a?token=abc": "https___x_invalid_a_token_abc",
 		"///":                           "unknown_operation",
@@ -150,7 +150,7 @@ func TestParseBaseURLNeverEchoesTheInput(t *testing.T) {
 	t.Parallel()
 
 	for _, raw := range []string{"https://user:secret-pw@example.invalid", "ftp://example.invalid", "example.invalid", "https://", "http://[::1"} {
-		_, err := ParseBaseURL("jira", raw)
+		_, err := ParseBaseURL("oci", raw)
 		if err == nil {
 			t.Errorf("ParseBaseURL(%q) error = nil", raw)
 			continue
@@ -159,7 +159,7 @@ func TestParseBaseURLNeverEchoesTheInput(t *testing.T) {
 			t.Errorf("ParseBaseURL(%q) error echoes the input: %v", raw, err)
 		}
 	}
-	if base, err := ParseBaseURL("jira", " https://example.invalid/sub/ "); err != nil || base.String() != "https://example.invalid/sub" {
+	if base, err := ParseBaseURL("oci", " https://example.invalid/sub/ "); err != nil || base.String() != "https://example.invalid/sub" {
 		t.Errorf("ParseBaseURL() = %v, %v", base, err)
 	}
 }
@@ -177,7 +177,7 @@ func TestDoJSONNeverRetriesAndStampsTheOperation(t *testing.T) {
 	t.Cleanup(server.Close)
 	base, _ := url.Parse(server.URL)
 	var out map[string]any
-	err := DoJSON(t.Context(), JSONRequest{Provider: "jira", BaseURL: base, Endpoint: "/rest/x", Operation: "list_x", Out: &out})
+	err := DoJSON(t.Context(), JSONRequest{Provider: "oci", BaseURL: base, Endpoint: "/rest/x", Operation: "list_x", Out: &out})
 	var httpErr HTTPError
 	if !errors.As(err, &httpErr) {
 		t.Fatalf("error %T is not an HTTPError", err)
@@ -207,7 +207,7 @@ func TestDoJSONCapsTheResponseBody(t *testing.T) {
 	t.Cleanup(server.Close)
 	base, _ := url.Parse(server.URL)
 	var out map[string]any
-	err := DoJSON(t.Context(), JSONRequest{Provider: "jira", BaseURL: base, Endpoint: "/rest/x", Operation: "list_x", Out: &out})
+	err := DoJSON(t.Context(), JSONRequest{Provider: "oci", BaseURL: base, Endpoint: "/rest/x", Operation: "list_x", Out: &out})
 	if !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("error = %v, want ErrResponseTooLarge", err)
 	}
@@ -230,7 +230,7 @@ func TestDoJSONDecodesWithinTheCap(t *testing.T) {
 	base, _ := url.Parse(server.URL)
 	var out struct{ OK bool }
 	err := DoJSON(t.Context(), JSONRequest{
-		Provider: "jira", BaseURL: base, Endpoint: "rest/x/", Query: url.Values{"b": {"2"}, "a": {"1"}}, Out: &out,
+		Provider: "oci", BaseURL: base, Endpoint: "rest/x/", Query: url.Values{"b": {"2"}, "a": {"1"}}, Out: &out,
 		Headers: func(r *http.Request) { r.Header.Set("X-Test", "1") },
 	})
 	if err != nil || !out.OK {
@@ -247,7 +247,7 @@ func TestDoJSONHonorsContext(t *testing.T) {
 	base, _ := url.Parse(server.URL)
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	err := DoJSON(ctx, JSONRequest{Provider: "jira", BaseURL: base, Endpoint: "/rest/x", Operation: "list_x"})
+	err := DoJSON(ctx, JSONRequest{Provider: "oci", BaseURL: base, Endpoint: "/rest/x", Operation: "list_x"})
 	var httpErr HTTPError
 	if !errors.As(err, &httpErr) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want a deadline HTTPError", err)
@@ -257,17 +257,17 @@ func TestDoJSONHonorsContext(t *testing.T) {
 func TestOversizeResponseIsTerminalNotRetryable(t *testing.T) {
 	t.Parallel()
 
-	err := HTTPError{Provider: "jira", Message: "decode response", Operation: "search_issues", Cause: ErrResponseTooLarge}
-	failure := ClassifyProviderFailure("jira", err, StatusPolicy{}, FailureRetryable)
+	err := HTTPError{Provider: "oci", Message: "decode response", Operation: "list_tags", Cause: ErrResponseTooLarge}
+	failure := ClassifyProviderFailure("oci", err, StatusPolicy{}, FailureRetryable)
 	if !failure.TerminalFailure() || failure.FailureClass() != string(FailureTerminal) {
 		t.Fatalf("class=%q terminal=%t, want a terminal failure", failure.FailureClass(), failure.TerminalFailure())
 	}
-	if failure.FailureOperation() != "search_issues" {
+	if failure.FailureOperation() != "list_tags" {
 		t.Fatalf("operation = %q, want the endpoint token kept", failure.FailureOperation())
 	}
 	// A transient decode failure stays retryable.
-	transient := HTTPError{Provider: "jira", Message: "decode response", Cause: errors.New("unexpected EOF")}
-	if ClassifyProviderFailure("jira", transient, StatusPolicy{}, FailureRetryable).TerminalFailure() {
+	transient := HTTPError{Provider: "oci", Message: "decode response", Cause: errors.New("unexpected EOF")}
+	if ClassifyProviderFailure("oci", transient, StatusPolicy{}, FailureRetryable).TerminalFailure() {
 		t.Fatal("an ordinary decode error must stay retryable")
 	}
 }

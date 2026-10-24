@@ -49,20 +49,6 @@ func retryableStatusCode(err error) (int, bool) {
 	}
 }
 
-// scanFailureResult maps a failed scan to its outcome value: skipped
-// transport failures record retryable_transport, skipped retryable HTTP
-// statuses record retryable_status, everything else failed.
-func scanFailureResult(ctx context.Context, err error) string {
-	switch {
-	case httpx.IsTransientTransportError(ctx, err):
-		return "retryable_transport"
-	case isSkippableTransientError(ctx, err):
-		return "retryable_status"
-	default:
-		return "failed"
-	}
-}
-
 // skipCauseClass names the skip cause for the warn log: the registry failure
 // class for HTTP status skips, the transport cause otherwise.
 func skipCauseClass(ctx context.Context, err error) string {

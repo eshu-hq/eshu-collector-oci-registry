@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/eshu-hq/eshu-collector-oci-registry/oci"
 	"github.com/eshu-hq/eshu-collector-oci-registry/oci/acr"
@@ -285,16 +284,6 @@ func decodeReason(err error) string {
 	default:
 		return "malformed JSON"
 	}
-}
-
-// parsePollInterval and duration helpers stay near the config surface they
-// serve; the claim handler itself is deadline-driven by the host.
-func parseDuration(raw string) (time.Duration, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0, nil
-	}
-	return time.ParseDuration(raw)
 }
 
 func firstNonBlank(values ...string) string {
