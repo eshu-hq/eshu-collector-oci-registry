@@ -258,6 +258,62 @@ func TestHandleRejectsBadConfigTerminal(t *testing.T) {
 	}
 }
 
+// TestHandleEnforcesConfigLimits proves the activation config limits knob is
+// wired to enforcement: a record bound below the scan's emission fails
+// terminal with the record-budget class and no facts.
+func TestHandleEnforcesConfigLimits(t *testing.T) {
+	t.Parallel()
+
+	config := handlerTargetConfig()
+	config["limits"] = map[string]any{"max_records_per_claim": 1}
+	result, err := handlerWith(fullHandlerClient(t)).Handle(context.Background(), Request{
+		ProtocolVersion: sdk.ProtocolVersionV1Alpha1,
+		Claim:           handlerClaim(),
+		Contract:        Contract(),
+		Config:          config,
+	})
+	if err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if result.State != sdk.ResultTerminal {
+		t.Fatalf("State = %q, want terminal", result.State)
+	}
+	if len(result.Facts) != 0 {
+		t.Fatal("terminal result carries facts")
+	}
+	if result.Statuses[0].FailureClass != FailureRecordBudget {
+		t.Fatalf("FailureClass = %q, want %q", result.Statuses[0].FailureClass, FailureRecordBudget)
+	}
+	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
+		t.Fatalf("ValidateResult() error = %v", err)
+	}
+}
+
+// TestHandleFillsUnsetConfigLimitsFromDefaults proves a partial limits object
+// keeps working bounds: fields the activation leaves unset fall back to the
+// defaults instead of zeroing enforcement.
+func TestHandleFillsUnsetConfigLimitsFromDefaults(t *testing.T) {
+	t.Parallel()
+
+	config := handlerTargetConfig()
+	config["limits"] = map[string]any{"claim_timeout_seconds": 600}
+	result, err := handlerWith(fullHandlerClient(t)).Handle(context.Background(), Request{
+		ProtocolVersion: sdk.ProtocolVersionV1Alpha1,
+		Claim:           handlerClaim(),
+		Contract:        Contract(),
+		Config:          config,
+	})
+	if err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if result.State != sdk.ResultComplete {
+		t.Fatalf("State = %q, want complete", result.State)
+	}
+	if len(result.Facts) == 0 {
+		t.Fatal("complete result carries no facts")
+	}
+}
+
 // TestHandleRejectsSpentLeaseRetryable proves an already-expired lease fails
 // retryable with the claim-deadline class and no facts, in a shape the host
 // validator accepts.

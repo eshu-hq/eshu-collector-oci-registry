@@ -83,12 +83,14 @@ func (h Handler) limits() ResourceUse {
 func (h Handler) Handle(ctx context.Context, request Request) (sdk.Result, error) {
 	started := h.now()
 	claim := request.Claim
-	limits := h.limits()
-	target, err := resolveTarget(request.Config, claim.Scope.ID, h.getenv)
+	target, configLimits, err := resolveTarget(request.Config, claim.Scope.ID, h.getenv)
 	if err != nil {
 		h.logConfigFailure(claim, err)
 		return budgetResult(claim, started, FailureInvalidConfig), nil
 	}
+	// The activation's limits win where set; the handler value fills the
+	// gaps, then the built-in defaults.
+	limits := configLimits.overlay(h.limits())
 	token, err := fencingToken(claim.FencingToken)
 	if err != nil {
 		h.logConfigFailure(claim, err)
