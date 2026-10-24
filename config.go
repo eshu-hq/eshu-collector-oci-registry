@@ -65,8 +65,8 @@ type targetJSON struct {
 // resolveTarget decodes the activation config and returns the repository
 // target whose scope ID matches the claim. The config is either one target
 // object or {"targets":[...]}; every target requires a scope match, including
-// a lone target, so a claim for another repository is rejected instead of
-// scanning the configured target as-is. Secrets resolve from the process
+// a lone target, so a mismatched lone target is rejected at config decode
+// instead of at the ScanClaim match. Secrets resolve from the process
 // environment.
 func resolveTarget(raw map[string]any, scopeID string, getenv func(string) string) (runtime.TargetConfig, error) {
 	if getenv == nil {
