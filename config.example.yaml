@@ -1,0 +1,59 @@
+# Example component activation config for the OCI registry collector. Copy it,
+# replace the placeholder registry and repository, and point the environment
+# variables at real credentials. It holds no secrets: username_env,
+# password_env, and bearer_token_env NAME environment variables the worker
+# process exports; their values never appear here, in facts, in logs, or in
+# statuses.
+#
+# Cutover identity. When this activation replaces the in-tree OCI registry
+# collector, the claim the coordinator plans must equal the in-tree one, or
+# every stable fact key changes:
+#   host.scope.id        = the in-tree target's scope_id
+#                          (oci-registry://<registry>/<repository>)
+#   host.scope.kind      = container_registry_repository
+#   host.sourceSystem    = the in-tree source system (oci_registry)
+# The generation id is claim-owned: reuse the in-tree generation on retry so
+# redelivery stays idempotent.
+host:
+  # Source system recorded on every fact. Match the claim the coordinator plans.
+  sourceSystem: oci_registry
+  scope:
+    # One activation covers one registry repository. The scope id is the
+    # normalized repository identity; it is part of every stable fact key, so
+    # choose it once and keep it.
+    id: oci-registry://registry-1.docker.io/library/busybox
+    kind: container_registry_repository
+process:
+  command: ./collector
+  args:
+    - --sdk-stdio
+  # A repository with a large tag window returns more than the host's default
+  # 4 MiB stdout cap. Raise this together with config.limits.maxResultBytes;
+  # the collector fails terminal with result_budget_exceeded rather than let
+  # the host drop an oversized result.
+  stdout_limit_bytes: 67108864
+config:
+  # Exactly one target object, or {"targets":[...]} matched by claim scope.
+  provider: dockerhub
+  registry: registry-1.docker.io
+  repository: library/busybox
+  tag_limit: 10
+  visibility: public
+  auth_mode: anonymous
+  source_uri: https://registry-1.docker.io/v2/library/busybox
+  username_env: OCI_REGISTRY_USER
+  password_env: OCI_REGISTRY_PASSWORD
+  # bearer_token_env: OCI_REGISTRY_TOKEN
+  # Only an explicitly attested repository may bypass the successor-emptiness
+  # backstop: an emptied or sharply shrunken generation still commits. Keep
+  # false unless an operator attests the deletion.
+  allow_empty_successor: false
+  limits:
+    maxRecordsPerClaim: 50000
+    maxPayloadBytes: 1048576
+    maxResultBytes: 50331648
+    # Wall-time bound for one claim. The host also kills the process at the
+    # claim deadline. The collector stops starting provider calls at the
+    # deadline minus min(2s, 5% of the time left) and returns retryable
+    # claim_deadline_exceeded with no facts.
+    claimTimeoutSeconds: 300

@@ -1,0 +1,79 @@
+[
+  {
+    "expires_at": "2027-10-01T00:00:00Z",
+    "kind": "oci_registry.repository",
+    "producer_id": "dev.eshu.collector.oci-registry",
+    "revoked": false,
+    "schema_versions": [
+      "1.0.0"
+    ],
+    "scope": "oci_registry",
+    "version": "0.1.0"
+  },
+  {
+    "expires_at": "2027-10-01T00:00:00Z",
+    "kind": "oci_registry.image_tag_observation",
+    "producer_id": "dev.eshu.collector.oci-registry",
+    "revoked": false,
+    "schema_versions": [
+      "1.0.0"
+    ],
+    "scope": "oci_registry",
+    "version": "0.1.0"
+  },
+  {
+    "expires_at": "2027-10-01T00:00:00Z",
+    "kind": "oci_registry.image_manifest",
+    "producer_id": "dev.eshu.collector.oci-registry",
+    "revoked": false,
+    "schema_versions": [
+      "1.0.0"
+    ],
+    "scope": "oci_registry",
+    "version": "0.1.0"
+  },
+  {
+    "expires_at": "2027-10-01T00:00:00Z",
+    "kind": "oci_registry.image_index",
+    "producer_id": "dev.eshu.collector.oci-registry",
+    "revoked": false,
+    "schema_versions": [
+      "1.0.0"
+    ],
+    "scope": "oci_registry",
+    "version": "0.1.0"
+  },
+  {
+    "expires_at": "2027-10-01T00:00:00Z",
+    "kind": "oci_registry.image_descriptor",
+    "producer_id": "dev.eshu.collector.oci-registry",
+    "revoked": false,
+    "schema_versions": [
+      "1.0.0"
+    ],
+    "scope": "oci_registry",
+    "version": "0.1.0"
+  },
+  {
+    "expires_at": "2027-10-01T00:00:00Z",
+    "kind": "oci_registry.image_referrer",
+    "producer_id": "dev.eshu.collector.oci-registry",
+    "revoked": false,
+    "schema_versions": [
+      "1.0.0"
+    ],
+    "scope": "oci_registry",
+    "version": "0.1.0"
+  },
+  {
+    "expires_at": "2027-10-01T00:00:00Z",
+    "kind": "oci_registry.warning",
+    "producer_id": "dev.eshu.collector.oci-registry",
+    "revoked": false,
+    "schema_versions": [
+      "1.0.0"
+    ],
+    "scope": "oci_registry",
+    "version": "0.1.0"
+  }
+]
