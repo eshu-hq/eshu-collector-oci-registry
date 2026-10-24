@@ -501,29 +501,42 @@ func TestHandleEnforcesConfigResultBudget(t *testing.T) {
 	}
 }
 
-// TestHandleEnforcesConfigTimeout proves a configured claim timeout fires:
-// with a provider that stalls until cancellation, a one-second config bound
-// ends the scan instead of passing silently, and the stalled scan reports
-// no facts.
+// TestHandleEnforcesConfigTimeout proves the configured claim timeout value
+// fires: with a provider that stalls until cancellation, a one-second config
+// bound ends the scan in about a second — far below the 300s handler default
+// and the one-hour claim deadline, so an ignored config value (300s+) cannot
+// pass the elapsed bound. The stalled scan reports terminal
+// registry_canceled with no facts.
 func TestHandleEnforcesConfigTimeout(t *testing.T) {
 	t.Parallel()
 
 	config := handlerTargetConfig()
 	config["limits"] = map[string]any{"claim_timeout_seconds": 1}
 	client := blockingRegistryClient{}
+	started := time.Now()
 	result, err := handlerWith(client).Handle(context.Background(), Request{
 		ProtocolVersion: sdk.ProtocolVersionV1Alpha1,
 		Claim:           handlerClaim(),
 		Contract:        Contract(),
 		Config:          config,
 	})
+	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("Handle() error = %v", err)
 	}
-	if result.State == sdk.ResultComplete {
-		t.Fatal("State = complete, want the configured timeout to end the stalled scan")
+	if result.State != sdk.ResultTerminal {
+		t.Fatalf("State = %q, want terminal", result.State)
+	}
+	if result.Statuses[0].FailureClass != regfail.RegistryFailureCanceled {
+		t.Fatalf("FailureClass = %q, want %q", result.Statuses[0].FailureClass, regfail.RegistryFailureCanceled)
 	}
 	if len(result.Facts) != 0 {
 		t.Fatal("timed-out scan carries facts")
+	}
+	if elapsed > 30*time.Second {
+		t.Fatalf("elapsed = %v, want the 1s config timeout to end the scan (handler default is 300s)", elapsed)
+	}
+	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
+		t.Fatalf("ValidateResult() error = %v", err)
 	}
 }
