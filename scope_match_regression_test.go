@@ -19,10 +19,10 @@ func TestResolveTargetEnforcesScopeInSingleTargetMode(t *testing.T) {
 	t.Parallel()
 
 	config := validTargetConfig()
-	if _, err := resolveTarget(config, "oci-registry://registry-1.docker.io/library/busybox", func(string) string { return "" }); err != nil {
+	if _, _, err := resolveTarget(config, "oci-registry://registry-1.docker.io/library/busybox", func(string) string { return "" }); err != nil {
 		t.Fatalf("resolveTarget(matching) error = %v, want the configured target", err)
 	}
-	_, err := resolveTarget(config, "oci-registry://ghcr.io/eshu-hq/other", func(string) string { return "" })
+	_, _, err := resolveTarget(config, "oci-registry://ghcr.io/eshu-hq/other", func(string) string { return "" })
 	if err == nil {
 		t.Fatal("resolveTarget(mismatched single target) error = nil, want scope rejection")
 	}

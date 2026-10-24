@@ -139,18 +139,28 @@ func TestResolveTargetMatchesMultiTargetScope(t *testing.T) {
 	t.Parallel()
 
 	first := validTargetConfig()
+	first["limits"] = map[string]any{"max_records_per_claim": 111}
 	second := map[string]any{
 		"provider": "ghcr", "registry": "ghcr.io",
 		"repository": "eshu-hq/parity-demo", "tag_limit": 1,
 		"source_uri": "https://ghcr.io/v2/eshu-hq/parity-demo",
+		"limits":     map[string]any{"max_records_per_claim": 222},
 	}
 	config := map[string]any{"targets": []any{first, second}}
-	target, _, err := resolveTarget(config, "oci-registry://ghcr.io/eshu-hq/parity-demo", func(string) string { return "" })
+	target, secondLimits, err := resolveTarget(config, "oci-registry://ghcr.io/eshu-hq/parity-demo", func(string) string { return "" })
 	if err != nil {
 		t.Fatalf("resolveTarget() error = %v", err)
 	}
 	if scope, err := target.ScopeID(); err != nil || scope != "oci-registry://ghcr.io/eshu-hq/parity-demo" {
 		t.Fatalf("ScopeID() = %q, %v", scope, err)
+	}
+	if secondLimits.MaxRecordsPerClaim != 222 {
+		t.Fatalf("second limits MaxRecordsPerClaim = %d, want 222 (matched target's own bounds)", secondLimits.MaxRecordsPerClaim)
+	}
+	if _, firstLimits, err := resolveTarget(config, "oci-registry://registry-1.docker.io/library/busybox", func(string) string { return "" }); err != nil {
+		t.Fatalf("resolveTarget(first) error = %v", err)
+	} else if firstLimits.MaxRecordsPerClaim != 111 {
+		t.Fatalf("first limits MaxRecordsPerClaim = %d, want 111 (matched target's own bounds)", firstLimits.MaxRecordsPerClaim)
 	}
 	if _, _, err := resolveTarget(config, "oci-registry://example.invalid/unknown", func(string) string { return "" }); err == nil {
 		t.Fatal("resolveTarget(unknown) error = nil, want rejection")
