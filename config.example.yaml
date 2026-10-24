@@ -28,7 +28,7 @@ process:
   args:
     - --sdk-stdio
   # A repository with a large tag window returns more than the host's default
-  # 4 MiB stdout cap. Raise this together with config.limits.maxResultBytes;
+  # 4 MiB stdout cap. Raise this together with config.limits.max_result_bytes;
   # the collector fails terminal with result_budget_exceeded rather than let
   # the host drop an oversized result.
   stdout_limit_bytes: 67108864
@@ -49,11 +49,11 @@ config:
   # false unless an operator attests the deletion.
   allow_empty_successor: false
   limits:
-    maxRecordsPerClaim: 50000
-    maxPayloadBytes: 1048576
-    maxResultBytes: 50331648
+    max_records_per_claim: 50000
+    max_payload_bytes: 1048576
+    max_result_bytes: 50331648
     # Wall-time bound for one claim. The host also kills the process at the
     # claim deadline. The collector stops starting provider calls at the
     # deadline minus min(2s, 5% of the time left) and returns retryable
     # claim_deadline_exceeded with no facts.
-    claimTimeoutSeconds: 300
+    claim_timeout_seconds: 300

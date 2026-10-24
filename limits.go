@@ -30,7 +30,7 @@ const (
 
 // DefaultResourceUse is the starting bound. The result bound sits under the
 // host's default 4 MiB stdout limit; a site with larger evidence raises both
-// limits.maxResultBytes and the activation's process.stdout_limit_bytes.
+// limits.max_result_bytes and the activation's process.stdout_limit_bytes.
 func DefaultResourceUse() ResourceUse {
 	return ResourceUse{
 		MaxRecordsPerClaim:  50_000,
@@ -38,6 +38,25 @@ func DefaultResourceUse() ResourceUse {
 		MaxResultBytes:      3 << 20,
 		ClaimTimeoutSeconds: 300,
 	}
+}
+
+// overlay returns r with every non-positive field taken from base, so a
+// partially customized activation keeps the handler's settings and only the
+// gaps fall back.
+func (r ResourceUse) overlay(base ResourceUse) ResourceUse {
+	if r.MaxRecordsPerClaim <= 0 {
+		r.MaxRecordsPerClaim = base.MaxRecordsPerClaim
+	}
+	if r.MaxPayloadBytes <= 0 {
+		r.MaxPayloadBytes = base.MaxPayloadBytes
+	}
+	if r.MaxResultBytes <= 0 {
+		r.MaxResultBytes = base.MaxResultBytes
+	}
+	if r.ClaimTimeoutSeconds <= 0 {
+		r.ClaimTimeoutSeconds = base.ClaimTimeoutSeconds
+	}
+	return r
 }
 
 // withDefaults fills every non-positive field from DefaultResourceUse.

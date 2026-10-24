@@ -57,9 +57,11 @@ repository. Only an attested target stamps its generation `TrustedDeletion`.
 
 A repository with a large tag window returns more than the host's default
 4 MiB stdout cap. Raise `process.stdout_limit_bytes` and
-`limits.maxResultBytes` together; the collector fails terminal with
+`limits.max_result_bytes` together; the collector fails terminal with
 `result_budget_exceeded` rather than letting the host drop an oversized
-result.
+result. The `limits` object holds `max_records_per_claim`,
+`max_payload_bytes`, `max_result_bytes`, and `claim_timeout_seconds`; fields
+the activation leaves unset fall back to the built-in defaults.
 
 ## Claim time budget
 

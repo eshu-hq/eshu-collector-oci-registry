@@ -65,7 +65,7 @@ func TestResolveTargetNilGetenvReadsProcessEnv(t *testing.T) {
 	config := handlerTargetConfig()
 	config["username_env"] = "ESHU_OCI_TEST_USER_9040"
 
-	target, err := resolveTarget(config, "oci-registry://registry-1.docker.io/library/busybox", nil)
+	target, _, err := resolveTarget(config, "oci-registry://registry-1.docker.io/library/busybox", nil)
 	if err != nil {
 		t.Fatalf("resolveTarget() error = %v", err)
 	}
