@@ -1,0 +1,65 @@
+apiVersion: eshu.dev/v1alpha1
+kind: ComponentPackage
+metadata:
+  id: dev.eshu.collector.oci-registry
+  name: OCI registry collector
+  publisher: eshu-hq
+  version: 0.1.0
+spec:
+  compatibleCore: ">=0.0.5 <0.2.0"
+  componentType: collector
+  collectorKinds:
+    - oci_registry
+  runtime:
+    sdkProtocol: collector-sdk/v1alpha1
+    adapter: process
+  artifacts:
+    - platform: linux/amd64
+      image: ghcr.io/eshu-hq/eshu-collector-oci-registry@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  emittedFacts:
+    - kind: oci_registry.repository
+      payloadSchemaRef: oci_registry.repository
+      schemaVersions:
+        - 1.0.0
+      sourceConfidence:
+        - reported
+    - kind: oci_registry.image_tag_observation
+      payloadSchemaRef: oci_registry.image_tag_observation
+      schemaVersions:
+        - 1.0.0
+      sourceConfidence:
+        - reported
+    - kind: oci_registry.image_manifest
+      payloadSchemaRef: oci_registry.image_manifest
+      schemaVersions:
+        - 1.0.0
+      sourceConfidence:
+        - reported
+    - kind: oci_registry.image_index
+      payloadSchemaRef: oci_registry.image_index
+      schemaVersions:
+        - 1.0.0
+      sourceConfidence:
+        - reported
+    - kind: oci_registry.image_descriptor
+      payloadSchemaRef: oci_registry.image_descriptor
+      schemaVersions:
+        - 1.0.0
+      sourceConfidence:
+        - reported
+    - kind: oci_registry.image_referrer
+      payloadSchemaRef: oci_registry.image_referrer
+      schemaVersions:
+        - 1.0.0
+      sourceConfidence:
+        - reported
+    - kind: oci_registry.warning
+      payloadSchemaRef: oci_registry.warning
+      schemaVersions:
+        - 1.0.0
+      sourceConfidence:
+        - reported
+  telemetry:
+    # Declared only: the collector emits no metric under this prefix. See the
+    # README section "Operator signals".
+    metricsPrefix: eshu_dp_oci_registry_collector_
