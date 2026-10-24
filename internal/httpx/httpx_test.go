@@ -111,7 +111,7 @@ func TestSanitizeOperationKeepsOnlyABoundedToken(t *testing.T) {
 	cases := map[string]string{
 		"":                              "",
 		"  ":                            "",
-		"list_tags":                 "list_tags",
+		"list_tags":                     "list_tags",
 		"Read Changelog":                "read_changelog",
 		"https://x.invalid/a?token=abc": "https___x_invalid_a_token_abc",
 		"///":                           "unknown_operation",
