@@ -183,18 +183,19 @@ func (h Handler) completeResult(claim sdk.Claim, collected runtime.ScanResult, s
 // warning fact whose code marks hidden referrers or a cut tag window.
 func degradedCoverage(facts []sdk.Fact) (bool, int) {
 	warnings := 0
+	degraded := false
 	for _, fact := range facts {
 		if fact.Kind != oci.FactKindWarning {
 			continue
 		}
 		warnings++
 		if code, ok := fact.Payload["warning_code"].(string); ok {
-			if _, degraded := degradedWarningCodes[code]; degraded {
-				return true, warnings
+			if _, isDegraded := degradedWarningCodes[code]; isDegraded {
+				degraded = true
 			}
 		}
 	}
-	return false, warnings
+	return degraded, warnings
 }
 
 // checkBudgets returns the failure class of the first exhausted bound, or "".
