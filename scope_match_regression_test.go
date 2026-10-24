@@ -4,6 +4,7 @@
 package collector
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -12,8 +13,8 @@ import (
 )
 
 // TestResolveTargetEnforcesScopeInSingleTargetMode proves single-target mode
-// enforces claim-scope matching: a claim for another repository is rejected
-// instead of scanning the configured target as-is.
+// enforces claim-scope matching at config decode: a claim for another
+// repository is rejected here instead of at the ScanClaim match.
 func TestResolveTargetEnforcesScopeInSingleTargetMode(t *testing.T) {
 	t.Parallel()
 
@@ -27,6 +28,35 @@ func TestResolveTargetEnforcesScopeInSingleTargetMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no configured target matches scope_id") {
 		t.Fatalf("rejection = %v, want scope mismatch", err)
+	}
+}
+
+// TestHandleRejectsMismatchedSingleTargetClaimTerminal proves end-to-end
+// protection: a single-target activation serving a claim for another
+// repository returns terminal invalid_config with no facts, so the wrong
+// target is never scanned.
+func TestHandleRejectsMismatchedSingleTargetClaimTerminal(t *testing.T) {
+	t.Parallel()
+
+	claim := handlerClaim()
+	claim.Scope.ID = "oci-registry://ghcr.io/eshu-hq/other"
+	result, err := handlerWith(fullHandlerClient(t)).Handle(context.Background(), Request{
+		ProtocolVersion: sdk.ProtocolVersionV1Alpha1,
+		Claim:           claim,
+		Contract:        Contract(),
+		Config:          handlerTargetConfig(),
+	})
+	if err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if result.State != sdk.ResultTerminal {
+		t.Fatalf("State = %q, want terminal", result.State)
+	}
+	if len(result.Facts) != 0 {
+		t.Fatal("terminal result carries facts")
+	}
+	if result.Statuses[0].FailureClass != FailureInvalidConfig {
+		t.Fatalf("FailureClass = %q, want %q", result.Statuses[0].FailureClass, FailureInvalidConfig)
 	}
 }
 
