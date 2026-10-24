@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -68,6 +69,9 @@ type targetJSON struct {
 // scanning the configured target as-is. Secrets resolve from the process
 // environment.
 func resolveTarget(raw map[string]any, scopeID string, getenv func(string) string) (runtime.TargetConfig, error) {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
 	targets, err := decodeTargets(raw)
 	if err != nil {
 		return runtime.TargetConfig{}, err

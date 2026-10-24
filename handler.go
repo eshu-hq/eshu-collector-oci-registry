@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -40,8 +41,8 @@ var errClaimDeadline = errors.New("claim lease deadline reached")
 // environment, the wall clock, and the real per-provider registry HTTP
 // clients.
 type Handler struct {
-	// Getenv resolves credential environment variables; nil selects os.Getenv
-	// at the call site in cmd/collector-oci-registry.
+	// Getenv resolves credential environment variables; nil selects os.Getenv,
+	// so the zero value reads the process environment.
 	Getenv func(string) string
 	// Now supplies the clock; nil selects time.Now.
 	Now func() time.Time
@@ -67,7 +68,7 @@ func (h Handler) getenv(key string) string {
 	if h.Getenv != nil {
 		return h.Getenv(key)
 	}
-	return ""
+	return os.Getenv(key)
 }
 
 func (h Handler) limits() ResourceUse {
