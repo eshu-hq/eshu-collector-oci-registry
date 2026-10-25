@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -50,6 +51,11 @@ type targetJSON struct {
 	// this repository. It defaults to false.
 	AllowEmptySuccessor bool `json:"allow_empty_successor"`
 
+	// Limits bounds one claim's emission for this target. It uses the
+	// snake_case keys of the enforcement bounds; every non-positive field
+	// falls back to the handler value, then the built-in default.
+	Limits ResourceUse `json:"limits"`
+
 	// TLSCACertPath points at a PEM bundle the collector trusts in addition to
 	// the system pool. Use it to scan a registry served with a private or
 	// self-signed CA, such as a local registry:2 over TLS, without weakening
@@ -62,34 +68,37 @@ type targetJSON struct {
 }
 
 // resolveTarget decodes the activation config and returns the repository
-// target whose scope ID matches the claim. The config is either one target
-// object or {"targets":[...]}; a single target is used as-is, while several
-// require a scope match. Secrets resolve from the process environment.
-func resolveTarget(raw map[string]any, scopeID string, getenv func(string) string) (runtime.TargetConfig, error) {
+// target whose scope ID matches the claim, plus that target's limits. The
+// config is either one target object or {"targets":[...]}; every target
+// requires a scope match, including a lone target, so a mismatched lone
+// target is rejected at config decode instead of at the ScanClaim match.
+// Secrets resolve from the process environment.
+func resolveTarget(raw map[string]any, scopeID string, getenv func(string) string) (runtime.TargetConfig, ResourceUse, error) {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
 	targets, err := decodeTargets(raw)
 	if err != nil {
-		return runtime.TargetConfig{}, err
+		return runtime.TargetConfig{}, ResourceUse{}, err
 	}
 	if len(targets) == 0 {
-		return runtime.TargetConfig{}, fmt.Errorf("collector configuration requires at least one target")
+		return runtime.TargetConfig{}, ResourceUse{}, fmt.Errorf("collector configuration requires at least one target")
 	}
-	if len(targets) == 1 {
-		return mapTarget(targets[0], getenv)
-	}
+
 	for i, target := range targets {
 		mapped, err := mapTarget(target, getenv)
 		if err != nil {
-			return runtime.TargetConfig{}, fmt.Errorf("targets[%d]: %w", i, err)
+			return runtime.TargetConfig{}, ResourceUse{}, fmt.Errorf("targets[%d]: %w", i, err)
 		}
 		scope, err := scopeIDFor(mapped)
 		if err != nil {
-			return runtime.TargetConfig{}, fmt.Errorf("targets[%d]: %w", i, err)
+			return runtime.TargetConfig{}, ResourceUse{}, fmt.Errorf("targets[%d]: %w", i, err)
 		}
 		if scope == scopeID {
-			return mapped, nil
+			return mapped, target.Limits, nil
 		}
 	}
-	return runtime.TargetConfig{}, fmt.Errorf("no configured target matches scope_id %q", scopeID)
+	return runtime.TargetConfig{}, ResourceUse{}, fmt.Errorf("no configured target matches scope_id %q", scopeID)
 }
 
 func decodeTargets(raw map[string]any) ([]targetJSON, error) {

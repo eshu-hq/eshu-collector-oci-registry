@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -40,8 +41,8 @@ var errClaimDeadline = errors.New("claim lease deadline reached")
 // environment, the wall clock, and the real per-provider registry HTTP
 // clients.
 type Handler struct {
-	// Getenv resolves credential environment variables; nil selects os.Getenv
-	// at the call site in cmd/collector-oci-registry.
+	// Getenv resolves credential environment variables; nil selects os.Getenv,
+	// so the zero value reads the process environment.
 	Getenv func(string) string
 	// Now supplies the clock; nil selects time.Now.
 	Now func() time.Time
@@ -67,7 +68,7 @@ func (h Handler) getenv(key string) string {
 	if h.Getenv != nil {
 		return h.Getenv(key)
 	}
-	return ""
+	return os.Getenv(key)
 }
 
 func (h Handler) limits() ResourceUse {
@@ -82,12 +83,14 @@ func (h Handler) limits() ResourceUse {
 func (h Handler) Handle(ctx context.Context, request Request) (sdk.Result, error) {
 	started := h.now()
 	claim := request.Claim
-	limits := h.limits()
-	target, err := resolveTarget(request.Config, claim.Scope.ID, h.getenv)
+	target, configLimits, err := resolveTarget(request.Config, claim.Scope.ID, h.getenv)
 	if err != nil {
 		h.logConfigFailure(claim, err)
 		return budgetResult(claim, started, FailureInvalidConfig), nil
 	}
+	// The activation's limits win where set; the handler value fills the
+	// gaps, then the built-in defaults.
+	limits := configLimits.overlay(h.limits())
 	token, err := fencingToken(claim.FencingToken)
 	if err != nil {
 		h.logConfigFailure(claim, err)
@@ -183,18 +186,19 @@ func (h Handler) completeResult(claim sdk.Claim, collected runtime.ScanResult, s
 // warning fact whose code marks hidden referrers or a cut tag window.
 func degradedCoverage(facts []sdk.Fact) (bool, int) {
 	warnings := 0
+	degraded := false
 	for _, fact := range facts {
 		if fact.Kind != oci.FactKindWarning {
 			continue
 		}
 		warnings++
 		if code, ok := fact.Payload["warning_code"].(string); ok {
-			if _, degraded := degradedWarningCodes[code]; degraded {
-				return true, warnings
+			if _, isDegraded := degradedWarningCodes[code]; isDegraded {
+				degraded = true
 			}
 		}
 	}
-	return false, warnings
+	return degraded, warnings
 }
 
 // checkBudgets returns the failure class of the first exhausted bound, or "".
