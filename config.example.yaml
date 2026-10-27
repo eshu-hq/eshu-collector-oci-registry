@@ -34,6 +34,11 @@ process:
   stdout_limit_bytes: 67108864
 config:
   # Exactly one target object, or {"targets":[...]} matched by claim scope.
+  # The host forwards this map verbatim per claim and may add the standard
+  # envelope keys alongside "targets": a top-level "limits" object with the
+  # same four bounds below (snake_case or camelCase; a target's own bounds
+  # win where set) and the host-minted "host_github_app_token" object, which
+  # this collector accepts and ignores. Any other top-level key fails closed.
   provider: dockerhub
   registry: registry-1.docker.io
   repository: library/busybox

@@ -51,6 +51,25 @@ statuses. `source_uri` is required: the host validator requires a source URI
 on every fact, so a blank one fails fast instead of emitting facts the host
 must reject.
 
+The component-extension host forwards the `config` map verbatim as the SDK
+request config, so a claim may also carry the standard host envelope keys
+alongside the targets. The full shape the host may send is one target object,
+or `{"targets":[...], "limits":{...}, "host_github_app_token":{...}}`:
+
+- Top-level `limits` holds the same four budget bounds as a target's own
+  `limits` (`max_records_per_claim`, `max_payload_bytes`, `max_result_bytes`,
+  `claim_timeout_seconds`), in `snake_case` or `camelCase`
+  (`maxRecordsPerClaim`, `maxPayloadBytes`, `maxResultBytes`,
+  `claimTimeoutSeconds`) as the host sends them. A target's own bounds win
+  where set; the top-level envelope fills the gaps, then the handler bounds,
+  then the built-in defaults.
+- `host_github_app_token` is the `{token, scope_id}` object the host injects
+  per claim when a token provider is configured. This collector accepts and
+  ignores it — OCI auth stays environment references — and its value never
+  reaches an error, a log line, or a status.
+
+Any other top-level key still fails closed without naming the key.
+
 `allow_empty_successor` (default false) is an explicit operator attestation
 that an empty or sharply shrunken successor generation is legitimate for this
 repository. Only an attested target stamps its generation `TrustedDeletion`.
@@ -60,9 +79,10 @@ A repository with a large tag window returns more than the host's default
 `config.limits.max_result_bytes` together; the collector fails terminal with
 `result_budget_exceeded` rather than letting the host drop an oversized
 result. The `limits` object holds `max_records_per_claim`,
-`max_payload_bytes`, `max_result_bytes`, and `claim_timeout_seconds`; every
+`max_payload_bytes`, `max_result_bytes`, and `claim_timeout_seconds` (or the
+`camelCase` equivalents the host forwards); every
 field is optional and an absent or non-positive field falls back to the
-handler bounds, then to the built-in defaults.
+top-level envelope value, then the handler bounds, then to the built-in defaults.
 
 ## Claim time budget
 
