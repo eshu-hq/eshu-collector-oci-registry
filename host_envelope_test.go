@@ -245,3 +245,118 @@ func TestResolveTargetRejectsNonObjectTopLevelLimits(t *testing.T) {
 		t.Fatalf("rejection echoes the value: %v", err)
 	}
 }
+
+// TestResolveTargetPrefersSnakeCaseWhenBothSpellingsPresent pins the
+// dual-spelling precedence: when one limits object carries both spellings of
+// a bound with different values, the snake_case activation spelling wins. It
+// covers the top-level envelope and a per-target object, for all four bounds.
+func TestResolveTargetPrefersSnakeCaseWhenBothSpellingsPresent(t *testing.T) {
+	t.Parallel()
+
+	bothSpellings := map[string]any{
+		"max_records_per_claim": 100,
+		"maxRecordsPerClaim":    200,
+		"max_payload_bytes":     2048,
+		"maxPayloadBytes":       4096,
+		"max_result_bytes":      8192,
+		"maxResultBytes":        16384,
+		"claim_timeout_seconds": 60,
+		"claimTimeoutSeconds":   120,
+	}
+	want := ResourceUse{
+		MaxRecordsPerClaim:  100,
+		MaxPayloadBytes:     2048,
+		MaxResultBytes:      8192,
+		ClaimTimeoutSeconds: 60,
+	}
+	scope := "oci-registry://registry-1.docker.io/library/busybox"
+	getenv := func(string) string { return "" }
+
+	topConfig := map[string]any{
+		"targets": []any{validTargetConfig()},
+		"limits":  bothSpellings,
+	}
+	if _, limits, err := resolveTarget(topConfig, scope, getenv); err != nil {
+		t.Fatalf("resolveTarget(top-level both spellings) error = %v", err)
+	} else if limits != want {
+		t.Fatalf("top-level limits = %+v, want %+v (snake_case wins)", limits, want)
+	}
+
+	target := validTargetConfig()
+	target["limits"] = bothSpellings
+	if _, limits, err := resolveTarget(target, scope, getenv); err != nil {
+		t.Fatalf("resolveTarget(per-target both spellings) error = %v", err)
+	} else if limits != want {
+		t.Fatalf("per-target limits = %+v, want %+v (snake_case wins)", limits, want)
+	}
+}
+
+// TestHandlePrefersEnvelopeLimitsOverHandlerLimits pins the envelope-over-
+// handler precedence leg: with a non-default handler bound and a silent
+// target, the top-level envelope governs the fields it sets, while the
+// handler still fills the fields the envelope leaves silent.
+func TestHandlePrefersEnvelopeLimitsOverHandlerLimits(t *testing.T) {
+	t.Parallel()
+
+	newTightHandler := func() Handler {
+		handler := handlerWith(fullHandlerClient(t))
+		handler.Limits = ResourceUse{MaxRecordsPerClaim: 1}
+		return handler
+	}
+	envelope := func(limits map[string]any) map[string]any {
+		return map[string]any{
+			"targets": []any{handlerTargetConfig()},
+			"limits":  limits,
+		}
+	}
+
+	t.Run("envelope wins where set", func(t *testing.T) {
+		t.Parallel()
+		result, err := newTightHandler().Handle(context.Background(), Request{
+			ProtocolVersion: sdk.ProtocolVersionV1Alpha1,
+			Claim:           handlerClaim(),
+			Contract:        Contract(),
+			Config: envelope(map[string]any{
+				"max_records_per_claim": 50000,
+				"max_payload_bytes":     1048576,
+				"max_result_bytes":      50331648,
+				"claim_timeout_seconds": 60,
+			}),
+		})
+		if err != nil {
+			t.Fatalf("Handle() error = %v", err)
+		}
+		if result.State != sdk.ResultComplete {
+			t.Fatalf("State = %q, want complete (envelope 50000 beats handler 1)", result.State)
+		}
+		if len(result.Facts) == 0 {
+			t.Fatal("complete result carries no facts")
+		}
+	})
+
+	t.Run("handler fills envelope gaps", func(t *testing.T) {
+		t.Parallel()
+		result, err := newTightHandler().Handle(context.Background(), Request{
+			ProtocolVersion: sdk.ProtocolVersionV1Alpha1,
+			Claim:           handlerClaim(),
+			Contract:        Contract(),
+			Config: envelope(map[string]any{
+				"max_payload_bytes":     1048576,
+				"max_result_bytes":      50331648,
+				"claim_timeout_seconds": 60,
+			}),
+		})
+		if err != nil {
+			t.Fatalf("Handle() error = %v", err)
+		}
+		if result.State != sdk.ResultTerminal {
+			t.Fatalf("State = %q, want terminal (handler 1 governs the silent field)", result.State)
+		}
+		if len(result.Facts) != 0 {
+			t.Fatal("terminal result carries facts")
+		}
+		if result.Statuses[0].FailureClass != FailureRecordBudget {
+			t.Fatalf("FailureClass = %q, want %q", result.Statuses[0].FailureClass, FailureRecordBudget)
+		}
+	})
+}
