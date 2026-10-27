@@ -51,9 +51,11 @@ type targetJSON struct {
 	// this repository. It defaults to false.
 	AllowEmptySuccessor bool `json:"allow_empty_successor"`
 
-	// Limits bounds one claim's emission for this target. It uses the
-	// snake_case keys of the enforcement bounds; every non-positive field
-	// falls back to the handler value, then the built-in default.
+	// Limits bounds one claim's emission for this target. It accepts the
+	// snake_case keys of the activation file and the camelCase keys the
+	// host forwards verbatim; every non-positive field falls back to the
+	// top-level envelope value, then the handler value, then the built-in
+	// default.
 	Limits ResourceUse `json:"limits"`
 
 	// TLSCACertPath points at a PEM bundle the collector trusts in addition to
@@ -67,17 +69,31 @@ type targetJSON struct {
 	TLSInsecureSkipVerify bool `json:"tls_insecure_skip_verify"`
 }
 
+// hostMintedTokenKey is the top-level SDK request config key carrying the
+// host-minted token object the component-extension host injects per claim
+// when a token provider is configured. The host owns the credential: only
+// the minted token crosses the stdio boundary, as an object
+// {token, scope_id}, and static activation config must not define this key.
+// This satellite neither reads nor spends it (OCI auth stays environment
+// references), so the key is accepted and ignored; its value never reaches
+// an error, a log, or a status.
+const hostMintedTokenKey = "host_github_app_token"
+
 // resolveTarget decodes the activation config and returns the repository
 // target whose scope ID matches the claim, plus that target's limits. The
-// config is either one target object or {"targets":[...]}; every target
-// requires a scope match, including a lone target, so a mismatched lone
-// target is rejected at config decode instead of at the ScanClaim match.
-// Secrets resolve from the process environment.
+// config is either one target object or {"targets":[...]} with the host
+// envelope: an optional top-level limits object (snake_case or camelCase)
+// and the host-minted token key. The matched target's own bounds win where
+// set; the top-level envelope fills the gaps, then the handler bounds, then
+// the built-in defaults. Every target requires a scope match, including a
+// lone target, so a mismatched lone target is rejected at config decode
+// instead of at the ScanClaim match. Secrets resolve from the process
+// environment.
 func resolveTarget(raw map[string]any, scopeID string, getenv func(string) string) (runtime.TargetConfig, ResourceUse, error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
-	targets, err := decodeTargets(raw)
+	targets, topLimits, err := decodeTargets(raw)
 	if err != nil {
 		return runtime.TargetConfig{}, ResourceUse{}, err
 	}
@@ -95,41 +111,91 @@ func resolveTarget(raw map[string]any, scopeID string, getenv func(string) strin
 			return runtime.TargetConfig{}, ResourceUse{}, fmt.Errorf("targets[%d]: %w", i, err)
 		}
 		if scope == scopeID {
-			return mapped, target.Limits, nil
+			return mapped, target.Limits.overlay(topLimits), nil
 		}
 	}
 	return runtime.TargetConfig{}, ResourceUse{}, fmt.Errorf("no configured target matches scope_id %q", scopeID)
 }
 
-func decodeTargets(raw map[string]any) ([]targetJSON, error) {
+// decodeTargets decodes the activation config into its repository targets
+// plus the top-level host envelope limits. The config is either one target
+// object or {"targets":[...]} carrying the envelope the
+// component-extension host forwards verbatim: an optional top-level limits
+// object and the host-minted token key, both accepted and (for the token)
+// ignored. Unknown keys still fail closed: the rejection never names the
+// key, because an operator key can be a pasted credential.
+func decodeTargets(raw map[string]any) ([]targetJSON, ResourceUse, error) {
 	if raw == nil {
-		return nil, fmt.Errorf("collector configuration is required")
+		return nil, ResourceUse{}, fmt.Errorf("collector configuration is required")
 	}
-	encoded, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("decode collector configuration: %w", err)
-	}
-	// Unknown keys fail closed: the rejection never names the key, because an
-	// operator key can be a pasted credential.
-	decode := func(encoded []byte, target any) error {
+	decode := func(cleaned map[string]any, target any) error {
+		encoded, err := json.Marshal(cleaned)
+		if err != nil {
+			return err
+		}
 		decoder := json.NewDecoder(bytes.NewReader(encoded))
 		decoder.DisallowUnknownFields()
 		return decoder.Decode(target)
 	}
 	if _, ok := raw["targets"]; ok {
+		topLimits, err := decodeTopLevelLimits(raw["limits"])
+		if err != nil {
+			return nil, ResourceUse{}, err
+		}
 		var decoded struct {
 			Targets []targetJSON `json:"targets"`
 		}
-		if err := decode(encoded, &decoded); err != nil {
-			return nil, fmt.Errorf("decode collector configuration targets: %s", decodeReason(err))
+		if err := decode(withoutHostKeys(raw, "limits"), &decoded); err != nil {
+			return nil, ResourceUse{}, fmt.Errorf("decode collector configuration targets: %s", decodeReason(err))
 		}
-		return decoded.Targets, nil
+		return decoded.Targets, topLimits, nil
 	}
 	var single targetJSON
-	if err := decode(encoded, &single); err != nil {
-		return nil, fmt.Errorf("decode collector configuration: %s", decodeReason(err))
+	if err := decode(withoutHostKeys(raw), &single); err != nil {
+		return nil, ResourceUse{}, fmt.Errorf("decode collector configuration: %s", decodeReason(err))
 	}
-	return []targetJSON{single}, nil
+	return []targetJSON{single}, ResourceUse{}, nil
+}
+
+// decodeTopLevelLimits parses the host envelope's top-level limits object in
+// either key spelling. A missing key stays zero so the handler bounds apply;
+// anything else must be the four documented budget bounds.
+func decodeTopLevelLimits(value any) (ResourceUse, error) {
+	if value == nil {
+		return ResourceUse{}, nil
+	}
+	bounds, ok := value.(map[string]any)
+	if !ok {
+		return ResourceUse{}, fmt.Errorf("decode collector configuration limits: field limits has the wrong type")
+	}
+	encoded, err := json.Marshal(bounds)
+	if err != nil {
+		return ResourceUse{}, fmt.Errorf("decode collector configuration limits: malformed JSON")
+	}
+	var limits ResourceUse
+	if err := json.Unmarshal(encoded, &limits); err != nil {
+		return ResourceUse{}, fmt.Errorf("decode collector configuration limits: %s", decodeReason(err))
+	}
+	return limits, nil
+}
+
+// withoutHostKeys returns a copy of the top-level config without the named
+// host envelope keys and the host-minted token key, so strict decoding stays
+// fail-closed for genuinely unknown keys while tolerating the documented
+// host envelope. Values are never inspected or echoed.
+func withoutHostKeys(raw map[string]any, keys ...string) map[string]any {
+	skip := map[string]struct{}{hostMintedTokenKey: {}}
+	for _, key := range keys {
+		skip[key] = struct{}{}
+	}
+	cleaned := make(map[string]any, len(raw))
+	for key, value := range raw {
+		if _, ok := skip[key]; ok {
+			continue
+		}
+		cleaned[key] = value
+	}
+	return cleaned
 }
 
 // envNamePattern bounds credential references to plain environment variable
@@ -286,10 +352,16 @@ func mapTarget(target targetJSON, getenv func(string) string) (runtime.TargetCon
 func decodeReason(err error) string {
 	var typeErr *json.UnmarshalTypeError
 	switch {
+	case errors.Is(err, errLimitsUnknownField):
+		return "unknown field"
 	case errors.As(err, &typeErr):
 		return "field " + typeErr.Field + " has the wrong type"
 	case strings.HasPrefix(err.Error(), "json: unknown field"):
 		return "unknown field"
+	case strings.HasPrefix(err.Error(), "field "):
+		// The flexible limits decoder's bounded rejections name only
+		// fixed-vocabulary fields, never values.
+		return err.Error()
 	default:
 		return "malformed JSON"
 	}
