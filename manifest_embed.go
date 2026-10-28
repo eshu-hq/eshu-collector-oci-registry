@@ -11,3 +11,5 @@ import _ "embed"
 //
 //go:embed manifest.yaml
 var ManifestYAML []byte
+
+// Probe-only comment: exercises image-lane selection on a Go-only PR.
