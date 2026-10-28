@@ -21,3 +21,5 @@ for kind in \
     --version "$version" --expires-in "$lifetime" \
     --component-home "$COMPONENT_HOME"
 done
+
+# skip-matrix probe: shell-only (throwaway, will close unmerged)
