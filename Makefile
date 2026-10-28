@@ -9,7 +9,7 @@
 #   make actionlint    # workflow lint (mirrors the actionlint lane)
 
 GOLANGCI_LINT_VERSION ?= v2.12.2
-COVERAGE_FLOOR ?= 77.5
+COVERAGE_FLOOR ?= 90.5
 
 .PHONY: ci lint test race actionlint tools-lint
 
