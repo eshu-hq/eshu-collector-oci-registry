@@ -190,3 +190,5 @@ for ECR credential minting, yaml for manifest shape tests, and itself.
 importable from a standalone collector; each file says what it copies and
 names the SDK helper that should replace it when published
 (`eshu-hq/eshu#8851`).
+
+<!-- skip-matrix probe: docs-only (throwaway, will close unmerged) -->
