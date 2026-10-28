@@ -62,3 +62,5 @@ config:
     # deadline minus min(2s, 5% of the time left) and returns retryable
     # claim_deadline_exceeded with no facts.
     claim_timeout_seconds: 300
+
+# skip probe: fixture-only
