@@ -12,14 +12,16 @@ import (
 func TestFactKinds(t *testing.T) {
 	t.Parallel()
 
+	// Literals, not the constants under test: a value drift must turn this
+	// test red on its own (see the manifest.yaml cross-check below it).
 	want := []string{
-		FactKindRepository,
-		FactKindTagObservation,
-		FactKindManifest,
-		FactKindIndex,
-		FactKindDescriptor,
-		FactKindReferrer,
-		FactKindWarning,
+		"oci_registry.repository",
+		"oci_registry.image_tag_observation",
+		"oci_registry.image_manifest",
+		"oci_registry.image_index",
+		"oci_registry.image_descriptor",
+		"oci_registry.image_referrer",
+		"oci_registry.warning",
 	}
 	got := FactKinds()
 	if !reflect.DeepEqual(got, want) {
