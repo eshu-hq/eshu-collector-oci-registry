@@ -346,12 +346,36 @@ func TestFailClosedLanesRunOnMisc(t *testing.T) {
 	}
 }
 
+// imageGoClauseProblems returns every way cond breaks the image-lane
+// go-source contract: the image embeds Go sources, so the lane must run
+// when the go change class is true. A bare substring check accepts an
+// inverted comparison, which selects the lane exactly when Go sources did
+// not change and skips it when they did.
+func imageGoClauseProblems(cond string) []string {
+	var problems []string
+	if !strings.Contains(cond, "needs.changes.outputs.go == 'true'") {
+		problems = append(problems, "image if lacks \"needs.changes.outputs.go == 'true'\": Go sources ship in the image")
+	}
+	for _, inverted := range []string{
+		"needs.changes.outputs.go != 'true'",
+		"needs.changes.outputs.go == 'false'",
+		"needs.changes.outputs.go != 'false'",
+	} {
+		if strings.Contains(cond, inverted) {
+			problems = append(problems, "image if contains inverted clause "+inverted)
+		}
+	}
+	return problems
+}
+
 // TestImageLaneRunsOnGoSources keeps the shipped artifact validated on
 // PRs that change what it embeds: the Dockerfile COPYs go.mod/go.sum,
 // COPYs the whole context (which keeps .go sources), and go-builds the
 // binary, so a Go-source or go.mod PR must select the image lane. A
 // go.mod toolchain bump past the pinned base would otherwise pass every
 // Go lane yet break docker build, surfacing only as post-merge red main.
+// The live ci.yml text must pass; an inverted or removed go clause must
+// fail (mirrors TestCICompleteAggregatesPerJobResults).
 func TestImageLaneRunsOnGoSources(t *testing.T) {
 	t.Parallel()
 
@@ -360,8 +384,17 @@ func TestImageLaneRunsOnGoSources(t *testing.T) {
 	if !ok {
 		t.Fatal("ci.yml has no image job")
 	}
-	if !strings.Contains(job.If, "needs.changes.outputs.go") {
-		t.Errorf("job image if = %q, want a go clause: Go sources ship in the image", job.If)
+	if problems := imageGoClauseProblems(job.If); len(problems) > 0 {
+		t.Errorf("image lane breaks its go-source contract:\n%s", strings.Join(problems, "\n"))
+	}
+
+	inverted := strings.Replace(job.If, "needs.changes.outputs.go == 'true'", "needs.changes.outputs.go != 'true'", 1)
+	if len(imageGoClauseProblems(inverted)) == 0 {
+		t.Errorf("inverted go clause: the gate accepted a lane that skips Go-source PRs")
+	}
+	removed := strings.ReplaceAll(job.If, "needs.changes.outputs.go == 'true'", "")
+	if len(imageGoClauseProblems(removed)) == 0 {
+		t.Errorf("removed go clause: the gate accepted a lane with no go selection")
 	}
 }
 
