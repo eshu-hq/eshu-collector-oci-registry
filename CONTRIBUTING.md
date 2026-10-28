@@ -32,11 +32,13 @@ for lanes its paths can affect: Go sources run `lint`, `test`, `race`,
 shell scripts run `shell` (plus `test`, which reads
 `scripts/record-grants.sh`); `Dockerfile` and manifest changes run
 `image`; dependency changes run `govulncheck`; workflow changes run
-`actionlint` plus the Go lanes. `ci-complete` is the only required
-check: it fails when a needed lane fails and passes when lanes were
-legitimately skipped (docs-only PRs).
+`actionlint` plus the Go lanes. The lanes execute inside one `go-ci`
+call to the shared reusable workflow; `go-ci / ci-complete` is the only
+required check: it fails when a needed lane fails and passes when lanes
+were legitimately skipped (docs-only PRs).
 
-Weekly, `govulncheck` and `gosec` (SARIF to the Security tab, advisory
-until its false-positive rate is measured) run on a schedule and file an
-issue on findings. Dependabot proposes weekly grouped `gomod` and
+Weekly, `govulncheck` and `gosec` (advisory until its false-positive
+rate is measured) run on a schedule and file an issue on findings; the
+findings ride the lane artifacts, never a Security-tab upload, so fork
+PRs stay green. Dependabot proposes weekly grouped `gomod` and
 `github-actions` bumps.

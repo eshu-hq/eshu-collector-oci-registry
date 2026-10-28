@@ -73,6 +73,8 @@ type workflowFile struct {
 		Permissions map[string]string `yaml:"permissions"`
 		Timeout     int               `yaml:"timeout-minutes"`
 		Env         map[string]string `yaml:"env"`
+		Uses        string            `yaml:"uses"`
+		With        map[string]any    `yaml:"with"`
 		Steps       []workflowStep    `yaml:"steps"`
 	} `yaml:"jobs"`
 }

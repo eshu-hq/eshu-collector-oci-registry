@@ -6,6 +6,7 @@ package collector
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -30,6 +31,9 @@ func TestCIWorkflowPinsActionsByCommitSHA(t *testing.T) {
 		t.Fatal("ci.yml defines no jobs")
 	}
 	for name, job := range workflow.Jobs {
+		if job.Uses != "" && !pinnedReusable.MatchString(job.Uses) {
+			t.Errorf("job %s uses %q, want a full commit SHA pin", name, job.Uses)
+		}
 		for _, step := range job.Steps {
 			if step.Uses != "" && !pinnedAction.MatchString(step.Uses) {
 				t.Errorf("job %s uses %q, want a full commit SHA pin", name, step.Uses)
@@ -38,40 +42,53 @@ func TestCIWorkflowPinsActionsByCommitSHA(t *testing.T) {
 	}
 }
 
-// frozenCILanes are the stable org job names. Only ci-complete is ever
-// required in a ruleset, so these names must not churn. vet is a step in
-// lint, not a job; boundary stays a job (the import-boundary gate).
-var frozenCILanes = []string{"changes", "lint", "test", "race", "shell", "image", "boundary", "govulncheck", "gosec", "actionlint", "ci-complete"}
+// pinnedReusable keeps a moved tag from changing what pull-request CI
+// executes: the reusable ref must be a full commit SHA (the `# v2` version
+// comment is advisory text, not the pin).
+var pinnedReusable = regexp.MustCompile(`^eshu-hq/\.github/\.github/workflows/go-collector-ci\.yml@[0-9a-f]{40}$`)
 
-// TestCIWorkflowKeepsFrozenJobNames keeps the org lane contract: the frozen
-// names exist, and the retired vet job is gone (vet is a step in lint now).
-func TestCIWorkflowKeepsFrozenJobNames(t *testing.T) {
+// wrapperCILanes are the only jobs the thin wrapper may define. Lane
+// bodies live in the reusable, so local lint/test/race/shell/image/
+// boundary/govulncheck/gosec/actionlint/ci-complete jobs must be gone:
+// a leftover local lane would run beside (or shadow) the reusable one.
+var wrapperCILanes = []string{"changes", "go-ci", "vuln-filing", "sec-filing"}
+
+// TestCIWorkflowKeepsWrapperShape keeps the wrapper contract: only wrapper
+// jobs exist, go-ci calls the reviewed reusable SHA, and no local lane job
+// survived the move.
+func TestCIWorkflowKeepsWrapperShape(t *testing.T) {
 	t.Parallel()
 
 	workflow := readCIWorkflow(t)
-	for _, name := range frozenCILanes {
+	for _, name := range wrapperCILanes {
 		if _, ok := workflow.Jobs[name]; !ok {
-			t.Errorf("ci.yml has no %q job, want the frozen lane names %v", name, frozenCILanes)
+			t.Errorf("ci.yml has no %q job, want the wrapper jobs %v", name, wrapperCILanes)
 		}
 	}
-	if _, ok := workflow.Jobs["vet"]; ok {
-		t.Errorf("ci.yml still has a %q job, want it folded into the lint lane", "vet")
+	for name := range workflow.Jobs {
+		known := false
+		for _, want := range wrapperCILanes {
+			if name == want {
+				known = true
+			}
+		}
+		if !known {
+			t.Errorf("ci.yml has unexpected job %q, want only the wrapper jobs %v", name, wrapperCILanes)
+		}
 	}
-	complete, ok := workflow.Jobs["ci-complete"]
+	call, ok := workflow.Jobs["go-ci"]
 	if !ok {
-		t.Fatal("ci.yml has no ci-complete job")
+		t.Fatal("ci.yml has no go-ci job")
 	}
-	needed := make(map[string]bool, len(complete.Needs))
-	for _, name := range complete.Needs {
-		needed[name] = true
+	if call.Uses != "eshu-hq/.github/.github/workflows/go-collector-ci.yml@4d01ab90baf5dd77c21cc1ee6bdf701332613449" {
+		t.Errorf("go-ci uses %q, want the reviewed v2 SHA pin", call.Uses)
 	}
-	for _, name := range frozenCILanes {
-		if name == "ci-complete" {
-			continue
-		}
-		if !needed[name] {
-			t.Errorf("ci-complete needs %v, want every other frozen lane %v", complete.Needs, frozenCILanes)
-		}
+	raw, err := os.ReadFile(".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "# v2") {
+		t.Errorf("ci.yml carries no # v2 version comment on the reusable pin")
 	}
 }
 
@@ -82,6 +99,11 @@ func TestCIWorkflowSetsJobTimeouts(t *testing.T) {
 
 	workflow := readCIWorkflow(t)
 	for name, job := range workflow.Jobs {
+		if name == "go-ci" {
+			// A `uses` job cannot carry timeout-minutes; the called
+			// lanes carry their own (pinned upstream by selftest).
+			continue
+		}
 		if job.Timeout <= 0 {
 			t.Errorf("job %s sets no timeout-minutes", name)
 		}
@@ -117,6 +139,11 @@ func TestCIWorkflowPRLeanesNeedNoConfiguredSecrets(t *testing.T) {
 		var texts []string
 		for key, value := range job.Env {
 			texts = append(texts, key+"="+value)
+		}
+		// Job-level `with:` inputs are a secret-passing surface since
+		// the go-ci move: a future `token: ${{ secrets.X }}` must fail.
+		for key, value := range job.With {
+			texts = append(texts, key+"="+fmt.Sprint(value))
 		}
 		for _, step := range job.Steps {
 			texts = append(texts, step.Run)
@@ -168,233 +195,147 @@ func TestChangesDefinesFixtureAndMiscClasses(t *testing.T) {
 	}
 }
 
-// aggregatorProblems returns every way run breaks the ci-complete contract:
-// it must compare each job's result (whole-object comparison never matches,
-// a bare needs.*.result array breaks green runs), fail failed and cancelled
-// lanes, and say skips are allowed.
-func aggregatorProblems(run string) []string {
+// expectedRunInputs pins each run-* expression verbatim: the non-PR
+// short-circuit is load-bearing (changes outputs are unused on push), and
+// a widened clause silently pays for lanes the change class never needs.
+// A dropped prefix or an extra clause fails this gate; rewire
+// deliberately by updating both sides together.
+var expectedRunInputs = map[string]string{
+	"run-lint":        "${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-test":        "${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.fixtures == 'true' || needs.changes.outputs.shell == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-race":        "${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-shell":       "${{ github.event_name != 'pull_request' || needs.changes.outputs.shell == 'true' }}",
+	"run-image":       "${{ github.event_name != 'pull_request' || needs.changes.outputs.image == 'true' || needs.changes.outputs.go == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-boundary":    "${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-govulncheck": "${{ github.event_name != 'pull_request' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-gosec":       "${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-actionlint":  "${{ github.event_name != 'pull_request' || needs.changes.outputs.workflows == 'true' }}",
+}
+
+// runInputProblems returns every way the go-ci wiring breaks the skip
+// matrix the paths-filter promises: each run-* input must equal its
+// pinned expression, or a narrow-lane PR silently pays for (or skips)
+// the wrong lanes.
+func runInputProblems(with map[string]any) []string {
 	var problems []string
-	if !strings.Contains(run, `v["result"]`) && !strings.Contains(run, `.get("result")`) {
-		problems = append(problems, `aggregator must compare v["result"] per job, not whole job objects (false-green)`)
-	}
-	if strings.Contains(run, "join(needs.*.result") {
-		problems = append(problems, "aggregator must not expand needs.*.result (bare array breaks green runs)")
-	}
-	for _, want := range []string{`"failure"`, `"cancelled"`, "skip"} {
-		if !strings.Contains(run, want) {
-			problems = append(problems, "aggregator never mentions "+want)
+	get := func(key string) string { return fmt.Sprint(with[key]) }
+	for key, want := range expectedRunInputs {
+		if got := get(key); got != want {
+			problems = append(problems, "go-ci "+key+" = "+got+", want "+want)
 		}
+	}
+	if got := get("gosec-fail-on-findings"); got != "${{ github.event_name == 'schedule' }}" {
+		problems = append(problems, "gosec-fail-on-findings = "+got+", want the schedule-only expression (filing unreachable otherwise)")
+	}
+	if got := get("coverage-floor"); got != "90.5" {
+		problems = append(problems, "coverage-floor = "+got+", want the 90.5 ratchet (may only rise, deliberately)")
+	}
+	if got := get("gosec-version"); got != "v2.30.0" {
+		problems = append(problems, "gosec-version = "+got+", want the triaged v2.30.0")
+	}
+	if cmd := get("boundary-command"); !strings.Contains(cmd, "TestImportBoundaryRejectsCoreAndCrossCollectorImports") {
+		problems = append(problems, "boundary-command runs no import-boundary gate")
+	}
+	if cmd := get("image-command"); !strings.Contains(cmd, "seed") || !strings.Contains(cmd, "sha256") || !strings.Contains(cmd, "FROM") {
+		problems = append(problems, "image-command skips the seed contract or digest pins")
 	}
 	return problems
 }
 
-// TestCICompleteAggregatesPerJobResults pins the aggregator shape against
-// its two historical false modes: the pre-gates shell loop over
-// join(needs.*.result) and a whole-object comparison. The live ci.yml text
-// must pass; both mutants must fail.
-func TestCICompleteAggregatesPerJobResults(t *testing.T) {
+// TestReusableWiringKeepsSkipMatrix pins the wrapper half of the skip
+// matrix: the live text must pass, and a wiring with a dropped clause must
+// fail (mirrors the old lane-level guards).
+func TestReusableWiringKeepsSkipMatrix(t *testing.T) {
 	t.Parallel()
 
 	workflow := readCIWorkflow(t)
-	complete, ok := workflow.Jobs["ci-complete"]
+	call, ok := workflow.Jobs["go-ci"]
 	if !ok {
-		t.Fatal("ci.yml has no ci-complete job")
+		t.Fatal("ci.yml has no go-ci job")
 	}
-	var runs []string
-	for _, step := range complete.Steps {
-		runs = append(runs, step.Run)
-	}
-	if problems := aggregatorProblems(strings.Join(runs, "\n")); len(problems) > 0 {
-		t.Errorf("ci-complete aggregator breaks its contract:\n%s", strings.Join(problems, "\n"))
+	if problems := runInputProblems(call.With); len(problems) > 0 {
+		t.Errorf("go-ci wiring breaks the skip matrix:\n%s", strings.Join(problems, "\n"))
 	}
 
-	for name, run := range map[string]string{
-		// The pre-gates aggregator: a bare needs.*.result array joined
-		// into shell words, blind to skips and cancelled lanes.
-		"bare needs array": "RESULTS: ${{ join(needs.*.result, ' ') }}\nfor result in $RESULTS; do if [ \"$result\" != \"success\" ]; then exit 1; fi; done",
-		// Whole job objects never equal "failure": every red run passed.
-		"whole objects": `bad = {k: v for k, v in needs.items() if v == "failure"}`,
-	} {
-		if len(aggregatorProblems(run)) == 0 {
-			t.Errorf("%s: the gate accepted a violating aggregator", name)
-		}
+	mutant := make(map[string]any, len(call.With))
+	for key, value := range call.With {
+		mutant[key] = value
+	}
+	mutant["run-image"] = strings.ReplaceAll(fmt.Sprint(call.With["run-image"]), "needs.changes.outputs.go == 'true' || ", "")
+	if len(runInputProblems(mutant)) == 0 {
+		t.Errorf("dropped image go clause: the gate accepted wiring that skips Go-source PRs")
+	}
+	prefix := make(map[string]any, len(call.With))
+	for key, value := range call.With {
+		prefix[key] = value
+	}
+	prefix["run-test"] = strings.ReplaceAll(fmt.Sprint(call.With["run-test"]), "github.event_name != 'pull_request' || ", "")
+	if len(runInputProblems(prefix)) == 0 {
+		t.Errorf("dropped non-PR prefix: the gate accepted wiring that skips push runs")
+	}
+	wide := make(map[string]any, len(call.With))
+	for key, value := range call.With {
+		wide[key] = value
+	}
+	wide["run-shell"] = strings.ReplaceAll(fmt.Sprint(call.With["run-shell"]), "needs.changes.outputs.shell", "needs.changes.outputs.shell || needs.changes.outputs.go")
+	if len(runInputProblems(wide)) == 0 {
+		t.Errorf("widened shell clause: the gate accepted wiring that pays for unneeded lanes")
+	}
+	floor := make(map[string]any, len(call.With))
+	for key, value := range call.With {
+		floor[key] = value
+	}
+	floor["coverage-floor"] = 74.1
+	if len(runInputProblems(floor)) == 0 {
+		t.Errorf("lowered floor: the gate accepted a coverage-floor drop")
 	}
 }
 
-// govulnReachabilityProblems returns every way the govulncheck lane breaks
-// its schedule-only notification contract: the scan must fail loud (no
-// -no-fail, no || true, no continue-on-error) so the failure()-gated issue
-// step below it stays reachable, and the issue step must carry failure()
-// plus the schedule gate (fork-PR safety).
-func govulnReachabilityProblems(scan, issue workflowStep) []string {
-	var problems []string
-	for _, quiet := range []string{"-no-fail", "|| true"} {
-		if strings.Contains(scan.Run, quiet) {
-			problems = append(problems, "govulncheck scan contains "+quiet+" (the issue step is unreachable)")
-		}
-	}
-	if scan.ContinueOnError {
-		problems = append(problems, "govulncheck scan sets continue-on-error (the issue step is unreachable)")
-	}
-	for _, want := range []string{"failure()", "schedule"} {
-		if !strings.Contains(issue.If, want) {
-			problems = append(problems, "govulncheck issue step if lacks "+want)
-		}
-	}
-	return problems
-}
-
-// TestGovulncheckIssueStepIsReachable pins the schedule-only notification
-// shape: the live ci.yml text must pass, and a quieted scan / ungated issue
-// mutant must fail (mirrors TestCICompleteAggregatesPerJobResults).
-func TestGovulncheckIssueStepIsReachable(t *testing.T) {
+// TestFilingJobsNotifyOnSchedule keeps the schedule-only notification
+// contract after the move: the scan steps live upstream, so each local
+// filing job must exist with failure() plus schedule gates AND a gate on
+// its own lane conclusion, or a lint/test/image/race failure on schedule
+// files a mislabeled security-findings issue.
+func TestFilingJobsNotifyOnSchedule(t *testing.T) {
 	t.Parallel()
 
 	workflow := readCIWorkflow(t)
-	job, ok := workflow.Jobs["govulncheck"]
-	if !ok {
-		t.Fatal("ci.yml has no govulncheck job")
+	lanes := map[string]string{
+		"vuln-filing": "check_name=go-ci%20%2F%20govulncheck",
+		"sec-filing":  "check_name=go-ci%20%2F%20gosec",
 	}
-	scanIdx := stepIndex(job.Steps, func(s workflowStep) bool { return strings.Contains(s.Run, "-scan package") })
-	issueIdx := stepIndex(job.Steps, func(s workflowStep) bool { return strings.Contains(s.Run, "gh issue create") })
-	if scanIdx < 0 || issueIdx < 0 {
-		t.Fatalf("govulncheck job has no scan/issue steps (scan=%d issue=%d)", scanIdx, issueIdx)
-	}
-	if problems := govulnReachabilityProblems(job.Steps[scanIdx], job.Steps[issueIdx]); len(problems) > 0 {
-		t.Errorf("govulncheck notification is unreachable:\n%s", strings.Join(problems, "\n"))
-	}
-
-	scan := job.Steps[scanIdx]
-	scan.Run += " govulncheck -no-fail"
-	if len(govulnReachabilityProblems(scan, job.Steps[issueIdx])) == 0 {
-		t.Errorf("-no-fail scan: the gate accepted an unreachable issue step")
-	}
-	issue := job.Steps[issueIdx]
-	issue.If = ""
-	if len(govulnReachabilityProblems(job.Steps[scanIdx], issue)) == 0 {
-		t.Errorf("ungated issue step: the gate accepted a step without failure()/schedule")
-	}
-}
-
-// gosecReachabilityProblems returns every way the gosec lane breaks its
-// schedule-only notification contract: the count step must fail scheduled
-// runs that carry findings (otherwise the failure()-gated issue step below
-// it stays reachable only on paper), and the issue step must carry
-// failure() plus the schedule gate.
-func gosecReachabilityProblems(countRun string, issue workflowStep) []string {
-	var problems []string
-	if !strings.Contains(countRun, "schedule") || !strings.Contains(countRun, "exit 1") {
-		problems = append(problems, "gosec count step never fails a scheduled run with findings (the issue step is unreachable)")
-	}
-	for _, want := range []string{"failure()", "schedule"} {
-		if !strings.Contains(issue.If, want) {
-			problems = append(problems, "gosec issue step if lacks "+want)
-		}
-	}
-	return problems
-}
-
-// TestGosecIssueStepIsReachable pins the gosec notification shape the same
-// way: the live text must pass, and a count step that stays green on
-// scheduled findings (or an ungated issue step) must fail.
-func TestGosecIssueStepIsReachable(t *testing.T) {
-	t.Parallel()
-
-	workflow := readCIWorkflow(t)
-	job, ok := workflow.Jobs["gosec"]
-	if !ok {
-		t.Fatal("ci.yml has no gosec job")
-	}
-	countIdx := stepIndex(job.Steps, func(s workflowStep) bool {
-		return strings.Contains(s.Run, "gosec.sarif") && strings.Contains(s.Run, "schedule")
-	})
-	issueIdx := stepIndex(job.Steps, func(s workflowStep) bool { return strings.Contains(s.Run, "gh issue create") })
-	if countIdx < 0 || issueIdx < 0 {
-		t.Fatalf("gosec job has no count/issue steps (count=%d issue=%d)", countIdx, issueIdx)
-	}
-	if problems := gosecReachabilityProblems(job.Steps[countIdx].Run, job.Steps[issueIdx]); len(problems) > 0 {
-		t.Errorf("gosec notification is unreachable:\n%s", strings.Join(problems, "\n"))
-	}
-
-	if len(gosecReachabilityProblems("echo no findings", job.Steps[issueIdx])) == 0 {
-		t.Errorf("advisory-only count: the gate accepted a count step that never fails")
-	}
-	issue := job.Steps[issueIdx]
-	issue.If = ""
-	if len(gosecReachabilityProblems(job.Steps[countIdx].Run, issue)) == 0 {
-		t.Errorf("ungated issue step: the gate accepted a step without failure()/schedule")
-	}
-}
-
-// TestFailClosedLanesRunOnMisc keeps the misc catch-all fail-closed: every
-// lane that runs on Go sources must also run when an unclassified file
-// (a Makefile, a future testdata golden) trips misc. gosec once lacked the
-// misc clause while the skip-matrix proof promised it, so a Makefile-only
-// PR skipped the security scan the proof claimed.
-func TestFailClosedLanesRunOnMisc(t *testing.T) {
-	t.Parallel()
-
-	workflow := readCIWorkflow(t)
-	for _, name := range []string{"lint", "test", "race", "boundary", "gosec"} {
+	for name, lane := range lanes {
 		job, ok := workflow.Jobs[name]
 		if !ok {
 			t.Fatalf("ci.yml has no %q job", name)
 		}
-		if !strings.Contains(job.If, "needs.changes.outputs.misc") {
-			t.Errorf("job %s if = %q, want a misc clause like the other fail-closed lanes", name, job.If)
+		if !strings.Contains(job.If, "failure()") || !strings.Contains(job.If, "schedule") {
+			t.Errorf("job %s if = %q, want failure() plus schedule", name, job.If)
 		}
-	}
-}
-
-// imageGoClauseProblems returns every way cond breaks the image-lane
-// go-source contract: the image embeds Go sources, so the lane must run
-// when the go change class is true. A bare substring check accepts an
-// inverted comparison, which selects the lane exactly when Go sources did
-// not change and skips it when they did.
-func imageGoClauseProblems(cond string) []string {
-	var problems []string
-	if !strings.Contains(cond, "needs.changes.outputs.go == 'true'") {
-		problems = append(problems, "image if lacks \"needs.changes.outputs.go == 'true'\": Go sources ship in the image")
-	}
-	for _, inverted := range []string{
-		"needs.changes.outputs.go != 'true'",
-		"needs.changes.outputs.go == 'false'",
-		"needs.changes.outputs.go != 'false'",
-	} {
-		if strings.Contains(cond, inverted) {
-			problems = append(problems, "image if contains inverted clause "+inverted)
+		gated, files, loud := false, false, false
+		for _, step := range job.Steps {
+			if strings.Contains(step.Run, lane) && strings.Contains(step.Run, `!= "failure"`) {
+				gated = true
+			}
+			// Pin the guard's own echo, not bare "null": the issue-lookup
+			// lines already compare $open against "null", so that
+			// substring survives guard removal (false green).
+			if strings.Contains(step.Run, `unknown lane conclusion`) {
+				loud = true
+			}
+			if strings.Contains(step.Run, "gh issue create") {
+				files = true
+			}
 		}
-	}
-	return problems
-}
-
-// TestImageLaneRunsOnGoSources keeps the shipped artifact validated on
-// PRs that change what it embeds: the Dockerfile COPYs go.mod/go.sum,
-// COPYs the whole context (which keeps .go sources), and go-builds the
-// binary, so a Go-source or go.mod PR must select the image lane. A
-// go.mod toolchain bump past the pinned base would otherwise pass every
-// Go lane yet break docker build, surfacing only as post-merge red main.
-// The live ci.yml text must pass; an inverted or removed go clause must
-// fail (mirrors TestCICompleteAggregatesPerJobResults).
-func TestImageLaneRunsOnGoSources(t *testing.T) {
-	t.Parallel()
-
-	workflow := readCIWorkflow(t)
-	job, ok := workflow.Jobs["image"]
-	if !ok {
-		t.Fatal("ci.yml has no image job")
-	}
-	if problems := imageGoClauseProblems(job.If); len(problems) > 0 {
-		t.Errorf("image lane breaks its go-source contract:\n%s", strings.Join(problems, "\n"))
-	}
-
-	inverted := strings.Replace(job.If, "needs.changes.outputs.go == 'true'", "needs.changes.outputs.go != 'true'", 1)
-	if len(imageGoClauseProblems(inverted)) == 0 {
-		t.Errorf("inverted go clause: the gate accepted a lane that skips Go-source PRs")
-	}
-	removed := strings.ReplaceAll(job.If, "needs.changes.outputs.go == 'true'", "")
-	if len(imageGoClauseProblems(removed)) == 0 {
-		t.Errorf("removed go clause: the gate accepted a lane with no go selection")
+		if !gated {
+			t.Errorf("job %s files without gating on its lane conclusion (%s)", name, lane)
+		}
+		if !loud {
+			t.Errorf("job %s skips silent on an empty lane conclusion", name)
+		}
+		if !files {
+			t.Errorf("job %s files no issue", name)
+		}
 	}
 }
 
