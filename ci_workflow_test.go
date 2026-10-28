@@ -317,7 +317,10 @@ func TestFilingJobsNotifyOnSchedule(t *testing.T) {
 			if strings.Contains(step.Run, lane) && strings.Contains(step.Run, `!= "failure"`) {
 				gated = true
 			}
-			if strings.Contains(step.Run, `"null"`) {
+			// Pin the guard's own echo, not bare "null": the issue-lookup
+			// lines already compare $open against "null", so that
+			// substring survives guard removal (false green).
+			if strings.Contains(step.Run, `unknown lane conclusion`) {
 				loud = true
 			}
 			if strings.Contains(step.Run, "gh issue create") {
