@@ -192,7 +192,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          lane=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs?check_name=go-ci%20%2F%20govulncheck&status=completed" --jq '.check_runs[0].conclusion')
+          lane=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs?check_name=go-ci%20%2F%20govulncheck&status=completed" --jq '.check_runs[0].conclusion') || exit 1
           if [ "$lane" != "failure" ]; then
             echo "govulncheck lane concluded $lane, not failure; not filing."
             exit 0
@@ -222,7 +222,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          lane=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs?check_name=go-ci%20%2F%20gosec&status=completed" --jq '.check_runs[0].conclusion')
+          lane=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs?check_name=go-ci%20%2F%20gosec&status=completed" --jq '.check_runs[0].conclusion') || exit 1
           if [ "$lane" != "failure" ]; then
             echo "gosec lane concluded $lane, not failure; not filing."
             exit 0

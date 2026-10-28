@@ -236,7 +236,7 @@ func runInputProblems(with map[string]any) []string {
 	if cmd := get("boundary-command"); !strings.Contains(cmd, "TestImportBoundaryRejectsCoreAndCrossCollectorImports") {
 		problems = append(problems, "boundary-command runs no import-boundary gate")
 	}
-	if cmd := get("image-command"); !strings.Contains(cmd, "seed") || !strings.Contains(cmd, "sha256") {
+	if cmd := get("image-command"); !strings.Contains(cmd, "seed") || !strings.Contains(cmd, "sha256") || !strings.Contains(cmd, "FROM") {
 		problems = append(problems, "image-command skips the seed contract or digest pins")
 	}
 	return problems
