@@ -312,10 +312,13 @@ func TestFilingJobsNotifyOnSchedule(t *testing.T) {
 		if !strings.Contains(job.If, "failure()") || !strings.Contains(job.If, "schedule") {
 			t.Errorf("job %s if = %q, want failure() plus schedule", name, job.If)
 		}
-		gated, files := false, false
+		gated, files, loud := false, false, false
 		for _, step := range job.Steps {
 			if strings.Contains(step.Run, lane) && strings.Contains(step.Run, `!= "failure"`) {
 				gated = true
+			}
+			if strings.Contains(step.Run, `"null"`) {
+				loud = true
 			}
 			if strings.Contains(step.Run, "gh issue create") {
 				files = true
@@ -323,6 +326,9 @@ func TestFilingJobsNotifyOnSchedule(t *testing.T) {
 		}
 		if !gated {
 			t.Errorf("job %s files without gating on its lane conclusion (%s)", name, lane)
+		}
+		if !loud {
+			t.Errorf("job %s skips silent on an empty lane conclusion", name)
 		}
 		if !files {
 			t.Errorf("job %s files no issue", name)
