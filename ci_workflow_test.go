@@ -140,6 +140,11 @@ func TestCIWorkflowPRLeanesNeedNoConfiguredSecrets(t *testing.T) {
 		for key, value := range job.Env {
 			texts = append(texts, key+"="+value)
 		}
+		// Job-level `with:` inputs are a secret-passing surface since
+		// the go-ci move: a future `token: ${{ secrets.X }}` must fail.
+		for key, value := range job.With {
+			texts = append(texts, key+"="+fmt.Sprint(value))
+		}
 		for _, step := range job.Steps {
 			texts = append(texts, step.Run)
 			for key, value := range step.Env {
@@ -190,39 +195,37 @@ func TestChangesDefinesFixtureAndMiscClasses(t *testing.T) {
 	}
 }
 
+// expectedRunInputs pins each run-* expression verbatim: the non-PR
+// short-circuit is load-bearing (changes outputs are unused on push), and
+// a widened clause silently pays for lanes the change class never needs.
+// A dropped prefix or an extra clause fails this gate; rewire
+// deliberately by updating both sides together.
+var expectedRunInputs = map[string]string{
+	"run-lint":        "${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-test":        "${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.fixtures == 'true' || needs.changes.outputs.shell == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-race":        "${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-shell":       "${{ github.event_name != 'pull_request' || needs.changes.outputs.shell == 'true' }}",
+	"run-image":       "${{ github.event_name != 'pull_request' || needs.changes.outputs.image == 'true' || needs.changes.outputs.go == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-boundary":    "${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-govulncheck": "${{ github.event_name != 'pull_request' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-gosec":       "${{ github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true' }}",
+	"run-actionlint":  "${{ github.event_name != 'pull_request' || needs.changes.outputs.workflows == 'true' }}",
+}
+
 // runInputProblems returns every way the go-ci wiring breaks the skip
-// matrix the paths-filter promises: each run-* input must name the change
-// outputs that select its lane, or a narrow-lane PR silently pays for (or
-// skips) the wrong lanes. The fail-closed misc clause and the image go
-// clause keep their old meaning at the input level.
+// matrix the paths-filter promises: each run-* input must equal its
+// pinned expression, or a narrow-lane PR silently pays for (or skips)
+// the wrong lanes.
 func runInputProblems(with map[string]any) []string {
 	var problems []string
 	get := func(key string) string { return fmt.Sprint(with[key]) }
-	needles := map[string][]string{
-		"run-lint":        {"needs.changes.outputs.go", "needs.changes.outputs.misc", "needs.changes.outputs.workflows"},
-		"run-test":        {"needs.changes.outputs.go", "needs.changes.outputs.fixtures", "needs.changes.outputs.shell", "needs.changes.outputs.misc", "needs.changes.outputs.workflows"},
-		"run-race":        {"needs.changes.outputs.go", "needs.changes.outputs.misc", "needs.changes.outputs.workflows"},
-		"run-shell":       {"needs.changes.outputs.shell"},
-		"run-image":       {"needs.changes.outputs.image", "needs.changes.outputs.go", "needs.changes.outputs.workflows"},
-		"run-boundary":    {"needs.changes.outputs.go", "needs.changes.outputs.misc", "needs.changes.outputs.workflows"},
-		"run-govulncheck": {"needs.changes.outputs.deps", "needs.changes.outputs.workflows"},
-		"run-gosec":       {"needs.changes.outputs.go", "needs.changes.outputs.misc", "needs.changes.outputs.workflows"},
-		"run-actionlint":  {"needs.changes.outputs.workflows"},
-	}
-	for key, wants := range needles {
-		got := get(key)
-		if got == "" || got == "<nil>" {
-			problems = append(problems, "go-ci with lacks "+key+" (its lane never runs)")
-			continue
-		}
-		for _, want := range wants {
-			if !strings.Contains(got, want) {
-				problems = append(problems, "go-ci "+key+" lacks "+want)
-			}
+	for key, want := range expectedRunInputs {
+		if got := get(key); got != want {
+			problems = append(problems, "go-ci "+key+" = "+got+", want "+want)
 		}
 	}
-	if got := get("gosec-fail-on-findings"); !strings.Contains(got, "schedule") {
-		problems = append(problems, "gosec-fail-on-findings never fires on schedule (filing unreachable)")
+	if got := get("gosec-fail-on-findings"); got != "${{ github.event_name == 'schedule' }}" {
+		problems = append(problems, "gosec-fail-on-findings = "+got+", want the schedule-only expression (filing unreachable otherwise)")
 	}
 	if got := get("coverage-floor"); got != "90.5" {
 		problems = append(problems, "coverage-floor = "+got+", want the 90.5 ratchet (may only rise, deliberately)")
@@ -262,6 +265,22 @@ func TestReusableWiringKeepsSkipMatrix(t *testing.T) {
 	if len(runInputProblems(mutant)) == 0 {
 		t.Errorf("dropped image go clause: the gate accepted wiring that skips Go-source PRs")
 	}
+	prefix := make(map[string]any, len(call.With))
+	for key, value := range call.With {
+		prefix[key] = value
+	}
+	prefix["run-test"] = strings.ReplaceAll(fmt.Sprint(call.With["run-test"]), "github.event_name != 'pull_request' || ", "")
+	if len(runInputProblems(prefix)) == 0 {
+		t.Errorf("dropped non-PR prefix: the gate accepted wiring that skips push runs")
+	}
+	wide := make(map[string]any, len(call.With))
+	for key, value := range call.With {
+		wide[key] = value
+	}
+	wide["run-shell"] = strings.ReplaceAll(fmt.Sprint(call.With["run-shell"]), "needs.changes.outputs.shell", "needs.changes.outputs.shell || needs.changes.outputs.go")
+	if len(runInputProblems(wide)) == 0 {
+		t.Errorf("widened shell clause: the gate accepted wiring that pays for unneeded lanes")
+	}
 	floor := make(map[string]any, len(call.With))
 	for key, value := range call.With {
 		floor[key] = value
@@ -273,13 +292,19 @@ func TestReusableWiringKeepsSkipMatrix(t *testing.T) {
 }
 
 // TestFilingJobsNotifyOnSchedule keeps the schedule-only notification
-// contract after the move: the scan and count steps live upstream, so the
-// local filing jobs must exist with failure() plus schedule gates.
+// contract after the move: the scan steps live upstream, so each local
+// filing job must exist with failure() plus schedule gates AND a gate on
+// its own lane conclusion, or a lint/test/image/race failure on schedule
+// files a mislabeled security-findings issue.
 func TestFilingJobsNotifyOnSchedule(t *testing.T) {
 	t.Parallel()
 
 	workflow := readCIWorkflow(t)
-	for _, name := range []string{"vuln-filing", "sec-filing"} {
+	lanes := map[string]string{
+		"vuln-filing": "check_name=go-ci%20%2F%20govulncheck",
+		"sec-filing":  "check_name=go-ci%20%2F%20gosec",
+	}
+	for name, lane := range lanes {
 		job, ok := workflow.Jobs[name]
 		if !ok {
 			t.Fatalf("ci.yml has no %q job", name)
@@ -287,13 +312,19 @@ func TestFilingJobsNotifyOnSchedule(t *testing.T) {
 		if !strings.Contains(job.If, "failure()") || !strings.Contains(job.If, "schedule") {
 			t.Errorf("job %s if = %q, want failure() plus schedule", name, job.If)
 		}
-		found := false
+		gated, files := false, false
 		for _, step := range job.Steps {
+			if strings.Contains(step.Run, lane) && strings.Contains(step.Run, `!= "failure"`) {
+				gated = true
+			}
 			if strings.Contains(step.Run, "gh issue create") {
-				found = true
+				files = true
 			}
 		}
-		if !found {
+		if !gated {
+			t.Errorf("job %s files without gating on its lane conclusion (%s)", name, lane)
+		}
+		if !files {
 			t.Errorf("job %s files no issue", name)
 		}
 	}
