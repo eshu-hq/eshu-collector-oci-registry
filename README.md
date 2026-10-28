@@ -175,6 +175,10 @@ go test ./...
 go test -race ./oci/... .
 ```
 
+`make ci` runs the lint, test, and race lanes CI runs
+(`.github/workflows/ci.yml`; the `ci-complete` job aggregates the others).
+See `CONTRIBUTING.md` for the lane contract.
+
 `boundary_test.go` fails the build on any import of Eshu internals or another
 collector: this module may only use the published SDK modules, the AWS SDK
 for ECR credential minting, yaml for manifest shape tests, and itself.
