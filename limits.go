@@ -119,9 +119,28 @@ func DefaultResourceUse() ResourceUse {
 	}
 }
 
+// clamp bounds every positive field to its ceiling, so a large
+// activation/host value cannot size per-claim memory/CPU without limit.
+// Non-positive fields are left for withDefaults/overlay to fill.
+func (r ResourceUse) clamp() ResourceUse {
+	if r.MaxRecordsPerClaim > maxRecordsCeiling {
+		r.MaxRecordsPerClaim = maxRecordsCeiling
+	}
+	if r.MaxPayloadBytes > maxPayloadCeiling {
+		r.MaxPayloadBytes = maxPayloadCeiling
+	}
+	if r.MaxResultBytes > maxResultCeiling {
+		r.MaxResultBytes = maxResultCeiling
+	}
+	if r.ClaimTimeoutSeconds > maxTimeoutCeiling {
+		r.ClaimTimeoutSeconds = maxTimeoutCeiling
+	}
+	return r
+}
+
 // overlay returns r with every non-positive field taken from base, so a
 // partially customized activation keeps the handler's settings and only the
-// gaps fall back.
+// gaps fall back. The merged result is clamped to the ceilings.
 func (r ResourceUse) overlay(base ResourceUse) ResourceUse {
 	if r.MaxRecordsPerClaim <= 0 {
 		r.MaxRecordsPerClaim = base.MaxRecordsPerClaim
@@ -135,10 +154,11 @@ func (r ResourceUse) overlay(base ResourceUse) ResourceUse {
 	if r.ClaimTimeoutSeconds <= 0 {
 		r.ClaimTimeoutSeconds = base.ClaimTimeoutSeconds
 	}
-	return r
+	return r.clamp()
 }
 
-// withDefaults fills every non-positive field from DefaultResourceUse.
+// withDefaults fills every non-positive field from DefaultResourceUse, then
+// clamps every field to its ceiling.
 func (r ResourceUse) withDefaults() ResourceUse {
 	defaults := DefaultResourceUse()
 	if r.MaxRecordsPerClaim <= 0 {
@@ -153,5 +173,5 @@ func (r ResourceUse) withDefaults() ResourceUse {
 	if r.ClaimTimeoutSeconds <= 0 {
 		r.ClaimTimeoutSeconds = defaults.ClaimTimeoutSeconds
 	}
-	return r
+	return r.clamp()
 }
