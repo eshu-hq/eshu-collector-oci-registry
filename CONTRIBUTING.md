@@ -27,7 +27,8 @@ actionlint lane.
 
 `.github/workflows/ci.yml` runs a `changes` job first, so a PR only pays
 for lanes its paths can affect: Go sources run `lint`, `test`, `race`,
-`boundary`, and `gosec`; fixtures and embedded config run `test`;
+`image` (the Dockerfile builds the binary from them), `boundary`, and
+`gosec`; fixtures and embedded config run `test`;
 shell scripts run `shell` (plus `test`, which reads
 `scripts/record-grants.sh`); `Dockerfile` and manifest changes run
 `image`; dependency changes run `govulncheck`; workflow changes run
