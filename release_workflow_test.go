@@ -69,6 +69,7 @@ type workflowFile struct {
 	Concurrency map[string]any    `yaml:"concurrency"`
 	Jobs        map[string]struct {
 		Needs       needsList         `yaml:"needs"`
+		If          string            `yaml:"if"`
 		Permissions map[string]string `yaml:"permissions"`
 		Timeout     int               `yaml:"timeout-minutes"`
 		Env         map[string]string `yaml:"env"`

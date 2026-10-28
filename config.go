@@ -77,7 +77,7 @@ type targetJSON struct {
 // This satellite neither reads nor spends it (OCI auth stays environment
 // references), so the key is accepted and ignored; its value never reaches
 // an error, a log, or a status.
-const hostMintedTokenKey = "host_github_app_token" // #nosec G101 -- envelope map-key identifier, not a credential; no secret material here, and the key's value is accepted and ignored, never logged
+const hostMintedTokenKey = "host_github_app_token" // #nosec G101 -- envelope map-key identifier, not a credential; no secret material here, and the key's value is accepted and ignored, never logged; triaged under #11
 
 // resolveTarget decodes the activation config and returns the repository
 // target whose scope ID matches the claim, plus that target's limits. The

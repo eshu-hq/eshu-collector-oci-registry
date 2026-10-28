@@ -20,7 +20,7 @@
 #   golangci/golangci-lint-action v9.3.0 d583c34f0599d37dbac4a198b9c83201be380893
 #   actions/upload-artifact v7.0.2       cf430e030ddbb5b0abf93d22962f4752f3646cd9
 #   rhysd/actionlint v1.7.9              a443f344ff32813837fa49f7aa6cbc478d770e62
-#   ludeeus/action-shellcheck (master)   00b27aa7cb85167568cb48a3838b75f4265f2bca
+#   ludeeus/action-shellcheck v2.0.0      00cae500b08a931fb5698e11e79bfbd38e612a38
 #   github/codeql-action/upload-sarif v4.39.1 8498dc4c2b27cdd99baf0f87955b29ebbf30c78d
 # Go tools (hash-verified by the toolchain on install):
 #   golangci-lint v2.12.2 (same binary Eshu uses; config in .golangci.yml)
@@ -225,7 +225,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: shellcheck
-        uses: ludeeus/action-shellcheck@00b27aa7cb85167568cb48a3838b75f4265f2bca
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # v2.0.0
         with:
           scandir: .
           format: gcc
@@ -303,7 +303,7 @@ jobs:
 
   gosec:
     needs: [changes]
-    if: github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.workflows == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.go == 'true' || needs.changes.outputs.misc == 'true' || needs.changes.outputs.workflows == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

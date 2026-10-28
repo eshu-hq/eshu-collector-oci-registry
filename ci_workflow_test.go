@@ -326,6 +326,26 @@ func TestGosecIssueStepIsReachable(t *testing.T) {
 	}
 }
 
+// TestFailClosedLanesRunOnMisc keeps the misc catch-all fail-closed: every
+// lane that runs on Go sources must also run when an unclassified file
+// (a Makefile, a future testdata golden) trips misc. gosec once lacked the
+// misc clause while the skip-matrix proof promised it, so a Makefile-only
+// PR skipped the security scan the proof claimed.
+func TestFailClosedLanesRunOnMisc(t *testing.T) {
+	t.Parallel()
+
+	workflow := readCIWorkflow(t)
+	for _, name := range []string{"lint", "race", "boundary", "gosec"} {
+		job, ok := workflow.Jobs[name]
+		if !ok {
+			t.Fatalf("ci.yml has no %q job", name)
+		}
+		if !strings.Contains(job.If, "needs.changes.outputs.misc") {
+			t.Errorf("job %s if = %q, want a misc clause like the other fail-closed lanes", name, job.If)
+		}
+	}
+}
+
 func readCIWorkflow(t *testing.T) workflowFile {
 	t.Helper()
 
