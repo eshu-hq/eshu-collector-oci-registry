@@ -167,6 +167,10 @@ component home. Core issues grants; this repository only ships the request.
 `0.1.0`); `release_version_test.go` enforces both directions, including the
 placeholder-digest gate and the tag-filtered release workflow.
 
+Every push to `main` also publishes the image tagged `:main`, `:latest`
+(moving), and `:sha-<long-sha>`, hardened with the same provenance, cosign,
+SBOM, and attestation verification steps as tag releases.
+
 ## Build and test
 
 ```bash
