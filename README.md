@@ -167,6 +167,10 @@ component home. Core issues grants; this repository only ships the request.
 `0.1.0`); `release_version_test.go` enforces both directions, including the
 placeholder-digest gate and the tag-filtered release workflow.
 
+The release workflow refuses to publish a version release unless the tag
+points at the protected `main` head, so a `v*` tag cut from any other commit
+publishes nothing. Merge the change to `main`, then tag that head.
+
 Every push to `main` also publishes the image tagged `:main`, `:latest`
 (moving), and `:sha-<long-sha>`, hardened with the same provenance, cosign,
 SBOM, and attestation verification steps as tag releases.

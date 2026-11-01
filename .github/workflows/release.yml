@@ -4,9 +4,10 @@ name: release
 # push. Nothing runs on a pull request, and nothing here deploys. A main push
 # publishes the moving :main and :latest tags plus an immutable
 # :sha-<long-sha> tag. A v* tag push publishes that tag exactly as before,
-# after the tag-shape and manifest-version guards pass; those guards run only
-# on tag events. A person copies the digest from the job summary into the
-# activation's seed.image (README, "Releasing").
+# after the tag-shape, main-head, and manifest-version guards pass; those
+# guards run only on tag events. The main-head guard refuses a v* tag that
+# does not point at the protected main head. A person copies the digest from
+# the job summary into the activation's seed.image (README, "Releasing").
 on:
   push:
     branches:
@@ -48,6 +49,17 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Require the tag to point at the protected main head
+        if: github.ref_type == 'tag'
+        env:
+          TAG_COMMIT: ${{ github.sha }}
+        run: |
+          git fetch origin main --quiet
+          main_head="$(git rev-parse origin/main)"
+          if [[ "${TAG_COMMIT}" != "${main_head}" ]]; then
+            echo "tag '${TAG_NAME}' points at ${TAG_COMMIT}, not the protected main head ${main_head}" >&2
+            exit 1
+          fi
       - name: Require the tag to match the manifest version
         if: github.ref_type == 'tag'
         run: |
