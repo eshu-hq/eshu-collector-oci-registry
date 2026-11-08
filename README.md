@@ -1,200 +1,153 @@
 # eshu-collector-oci-registry
 
-Standalone OCI registry collector for Eshu, extracted from the Eshu core
-repository (`eshu-hq/eshu#8861`). It serves one claim at a time through the
-component-extension host with the process runner: the host passes one
-collector-sdk/v1alpha1 request on stdin and the collector returns one result
-on stdout. It is pre-release and holds no producer authority until its
-reviewed cutover.
+Status: pre-release. Do not rely on it in production yet.
+
+This collector reads one container-image repository from an OCI registry and hands Eshu a checked summary of its tags and image files.
+
+Eshu is the core system. A collector is a small helper program: it reads one outside system, turns what it finds into facts (small, typed records), and gives those facts back to Eshu. OCI is the open standard most container registries speak (Docker Hub, GHCR, ECR, and others). This collector only reads registries. It never pushes, deletes, or changes an image.
 
 ## What it collects
 
-For the container-registry repository named by the claim it reads, through
-bounded OCI Distribution calls:
+One run (a claim, the job Eshu sends) covers one registry repository. Through bounded OCI Distribution calls (the registry read protocol) it reads the repository record, every tag in a bounded tag window, one manifest or index per tag (a manifest describes one image; an index lists variants for different platforms), the descriptors those files point to (layers and config blobs, identified by digest), and referrers (extra files attached to an image, such as signatures, reported through the Referrers API where the registry offers it).
 
-- the repository record and every tag in the bounded tag window;
-- one manifest or index per tag, with config, layer, and platform detail;
-- descriptors referenced by manifests, and descriptors reported as referrers.
+It returns 7 fact kinds, all at schema `1.0.0` with confidence `reported` (the registry said so; Eshu did not check the bytes itself):
 
-It emits the seven core `oci_registry.*` kinds at schema `1.0.0`:
-`repository`, `image_tag_observation`, `image_manifest`, `image_index`,
-`image_descriptor`, `image_referrer`, and `warning`. Unknown annotations,
-non-allowlisted labels, and credential-bearing URLs are replaced or dropped
-before emission.
+| Fact kind | One fact describes |
+| --- | --- |
+| `oci_registry.repository` | the repository itself |
+| `oci_registry.image_tag_observation` | one tag seen in the repository |
+| `oci_registry.image_manifest` | one image manifest |
+| `oci_registry.image_index` | one multi-platform image index |
+| `oci_registry.image_descriptor` | one referenced blob (layer, config, or platform entry) |
+| `oci_registry.image_referrer` | one file attached to an image |
+| `oci_registry.warning` | something the registry hid or the read had to skip |
 
-Result states: `complete`; `partial` when the registry hid the Referrers API
-or the tag list exceeded the bounded window (both become warning facts);
-`retryable` for rate limits, transport errors, and 5xx; `terminal` for auth
-denials, missing repositories, invalid configuration, and exhausted-budget
-failures. A failed claim emits no facts, and a cancelled claim returns no
-result at all. The collector never returns `unchanged`: the host sends no
-previous digest, so duplicate detection rides on `generation.freshness_hint`.
+Unknown annotations, labels outside an allowlist, and web addresses that carry credentials are replaced or dropped before anything leaves the collector.
 
-## Providers
+A run ends as `complete`, `partial` (the registry hid the Referrers API or the tag list passed the bounded window; both become warning facts), `retryable` (try again later: rate limits, network errors, server 5xx errors), or `terminal` (stop until a person fixes something: login refused, missing repository, bad setup, spent budget). A failed run returns no facts, and a cancelled run returns no result at all. The collector never returns `unchanged`, because the host sends no earlier digest; Eshu spots duplicates with a freshness hint instead.
 
-Seven registry flavors share the Distribution client: Docker Hub, GHCR, ECR
-(AWS credentials minted per claim), JFrog Artifactory, Harbor, Google Artifact
-Registry, and Azure Container Registry. Provider adapters translate registry
-coordinates and credentials; the runtime owns the scan.
+Seven registry flavors share the same read client: Docker Hub, GHCR, Amazon ECR (AWS credentials are minted per claim), JFrog Artifactory, Harbor, Google Artifact Registry, and Azure Container Registry. Small per-registry adapters translate addresses and logins; the scan itself is shared.
 
-## Configuration
+## How data flows
 
-`config.example.yaml` is an activation config. The `config` map holds one
-repository target — `provider`, `registry`, `repository`, `tag_limit`,
-`visibility`, `auth_mode`, `source_uri`, `*_env` credential references — or a
-`{"targets":[...]}` list matched by claim scope. Unknown keys fail closed: the
-rejection never names the key (it can be a pasted credential), so compare the
-config with `config.example.yaml`. `username_env`, `password_env`, and
-`bearer_token_env` name environment variables the worker exports; they must be
-plain names, and secret values never appear in facts, source URIs, logs, or
-statuses. `source_uri` is required: the host validator requires a source URI
-on every fact, so a blank one fails fast instead of emitting facts the host
-must reject.
+```mermaid
+flowchart LR
+  A["OCI registry<br/>one repository"] --> B["This collector"] --> C["Eshu host process"] --> D["Eshu core"]
+```
 
-The component-extension host forwards the `config` map verbatim as the SDK
-request config, so a claim may also carry the standard host envelope keys
-alongside the targets. The full shape the host may send is one target object,
-or `{"targets":[...], "limits":{...}, "host_github_app_token":{...}}`:
+Text version: OCI registry repository → this collector → Eshu host process (checks and stores the result) → Eshu core. The collector never talks to Eshu's database directly.
 
-- Top-level `limits` holds the same four budget bounds as a target's own
-  `limits` (`max_records_per_claim`, `max_payload_bytes`, `max_result_bytes`,
-  `claim_timeout_seconds`), in `snake_case` or `camelCase`
-  (`maxRecordsPerClaim`, `maxPayloadBytes`, `maxResultBytes`,
-  `claimTimeoutSeconds`) as the host sends them. A target's own bounds win
-  where set; the top-level envelope fills the gaps, then the handler bounds,
-  then the built-in defaults.
-- `host_github_app_token` is the `{token, scope_id}` object the host injects
-  per claim when a token provider is configured. This collector accepts and
-  ignores it — OCI auth stays environment references — and its value never
-  reaches an error, a log line, or a status.
+## When to use it, and when not to
 
-Any other top-level key still fails closed without naming the key.
+Use it when Eshu needs to know which tags, images, and attached files exist in one registry repository, refreshed on a schedule Eshu controls. Do not use it to publish or delete images, to scan image contents layer by layer, or as a general registry browser. It reports registry metadata only, for the repositories you set up.
 
-`allow_empty_successor` (default false) is an explicit operator attestation
-that an empty or sharply shrunken successor generation is legitimate for this
-repository. Only an attested target stamps its generation `TrustedDeletion`.
+## How Eshu runs it
 
-A repository with a large tag window returns more than the host's default
-4 MiB stdout cap. Raise `process.stdout_limit_bytes` and
-`config.limits.max_result_bytes` together; the collector fails terminal with
-`result_budget_exceeded` rather than letting the host drop an oversized
-result. The `limits` object holds `max_records_per_claim`,
-`max_payload_bytes`, `max_result_bytes`, and `claim_timeout_seconds` (or the
-`camelCase` equivalents the host forwards); every
-field is optional and an absent or non-positive field falls back to the
-top-level envelope value, then the handler bounds, then to the built-in defaults.
+Eshu's component host starts this program for one claim at a time: it sends one bounded `collector-sdk/v1alpha1` request on standard input (stdin) and reads one result from standard output (stdout). The collector gets no database, graph, queue, or lease handle; the host checks the result and owns claims and commits.
 
-## Claim time budget
+```bash
+collector --sdk-stdio   # serve one claim from stdin
+```
 
-The host sets a claim's deadline to the **initial lease expiry** and kills the
-process there. Heartbeats do not extend it. The collector stops starting
-provider calls at the deadline minus `min(2s, 5% of the time left)` and
-returns retryable `claim_deadline_exceeded` with no facts, so it ends with a
-result of its own instead of being killed mid-request.
-
-## Operator signals
-
-The extension host passes one thing from a claim's result to the work item:
-the **failure class** (`registry_rate_limited`, `invalid_config`,
-`claim_deadline_exceeded`, ...). The worker does not set a status recorder,
-so everything else in the result's status row is dropped:
-
-- **Dropped: source latency and fact count.** The collector fills them in, but
-  no dashboard or work item shows them.
-- **Dropped: `retry_after_seconds`.** The collector sends it on every
-  retryable result, but the worker does not honor it yet.
-- **Dropped: the stderr log line.** The collector writes one JSON line per
-  claim to stderr: the outcome, scope, generation, failure class, operation,
-  HTTP status, and fact count — no URLs, bodies, or secrets. The host's
-  process runner keeps stderr only as a byte count and drops the text. The
-  line is for a local run (`collector --sdk-stdio < request.json`) and for
-  tests.
-- **No spans or metrics.** The in-tree collector emitted fetch spans and fetch
-  counters. This collector has no equivalent. The manifest declares
-  `telemetry.metricsPrefix: eshu_dp_oci_registry_collector_`, but nothing in
-  this repository emits a metric under it.
-
-## Image and seeding
-
-The image holds one static binary that installs itself, so an init container
-needs no shell:
+The published image is `ghcr.io/eshu-hq/eshu-collector-oci-registry`. It holds one static binary with no shell, and the binary can install itself into a component folder (how a startup, or init, container sets it up):
 
 ```bash
 collector seed --dest /component [--image-ref ghcr.io/eshu-hq/eshu-collector-oci-registry@sha256:<digest>]
 ```
 
-writes `/component/collector` (mode 0755) and `/component/manifest.yaml`.
-`--image-ref REF` (or the `COLLECTOR_IMAGE_REF` environment variable; the flag
-wins) stamps the deployed digest-pinned reference into the manifest's artifact
-entry, because an image cannot embed its own digest. The repository manifest
-keeps the all-zero placeholder digest permanently (`manifest_test.go` fails on
-a real one), because it is embedded in the binary and a committed digest could
-only describe an older build. `scripts/pin-digest.sh <repo:tag>` only prints
-the `repo@sha256:...` reference of a pushed image; it edits nothing.
+This writes `/component/collector` (mode 0755) and `/component/manifest.yaml`. `--image-ref` (or the `COLLECTOR_IMAGE_REF` environment variable; the flag wins) stamps the exact deployed image reference into the manifest, because an image cannot contain its own digest. The manifest in this repository keeps an all-zero placeholder digest on purpose. `scripts/pin-digest.sh <repo:tag>` only prints the `repo@sha256:...` reference of a pushed image; it edits nothing.
 
-## Cutover identity
+## Configuration
 
-Replacing the in-tree OCI registry collector with this one must not re-key a
-single fact. These activation values have to equal what the in-tree collector
-uses for the same repository:
+Copy `config.example.yaml`. It has three parts: `host` names the job identity Eshu plans, `process` says how Eshu starts the binary, and `config` holds the registry target. The `config` map is either one target (below) or a `{"targets": [...]}` list, matched to the claim by scope. Unknown keys are rejected, and the error never names the bad key (it could be a pasted secret), so compare your file with the example when a config is rejected.
 
-| Activation value | Must equal the in-tree value | If it differs |
-| --- | --- | --- |
-| `host.scope.id` | the in-tree target's `scope_id` (`oci-registry://<registry>/<repository>`) | every stable key and `scope_id` changes: the repository is ingested as a new scope |
-| `host.scope.kind` | `container_registry_repository` | the scope no longer matches the in-tree scope kind |
-| `host.sourceSystem` | the in-tree source system, `oci_registry` | `source_ref` changes on every fact |
-| claim `generation_id` | the in-tree generation id | retries are not idempotent with the in-tree generation |
+| Target key | Meaning |
+| --- | --- |
+| `provider` | Registry flavor, for example `dockerhub` |
+| `registry`, `repository` | Registry host and repository path, for example `registry-1.docker.io` and `library/busybox` |
+| `tag_limit` | Most tags to read in one claim |
+| `visibility`, `auth_mode` | Whether the repository is public or private; how to log in (for example `anonymous` for a public read) |
+| `source_uri` | Required source address recorded on every fact; a blank value fails fast |
+| `username_env`, `password_env`, `bearer_token_env` | Names of environment variables that hold the login (see below) |
+| `allow_empty_successor` | Leave `false` unless an operator confirms an emptied repository is correct (see below) |
+| `limits.*` | Size and time caps for one claim (see below) |
 
-Stable fact keys and generation fingerprints use the same algorithm as the
-in-tree collector (`internal/stableid` pins it against values produced by the
-in-tree function), so identical inputs emit identical keys. Run only one of
-the two collectors per repository: with the same scope they would write the
-same stable keys.
+The host may also send two standard extras next to `targets`: a top-level `limits` object (same four caps, in `snake_case` or `camelCase`; a target's own caps win where set) and a `host_github_app_token` object, which this collector accepts and ignores because registry login stays in environment variables. Any other extra key is still rejected. `allow_empty_successor: true` is an explicit operator promise that an empty or much smaller result is correct for that repository and may replace the old one; only a target with that promise gets that treatment.
 
-## Producer grants
+## Credentials
 
-All seven kinds are core-owned, so the host refuses them without a live
-producer grant. `grant.example.json` lists the seven requests. Each grant is
-bound to this component id and version and scoped to the manifest's collector
-kind (`oci_registry`), not to a repository: core matches a grant's scope
-against the collector kinds the manifest declares.
-`scripts/record-grants.sh` records them with `eshu component grant` in a
-component home. Core issues grants; this repository only ships the request.
+Secrets never go in the config file. `username_env`, `password_env`, and `bearer_token_env` name environment variables the worker process already has, and each value must be a plain variable name. For Amazon ECR, short-lived registry credentials are minted per claim from the worker's AWS credentials instead. Public repositories can use `auth_mode: anonymous` with no login at all. Secret values never appear in facts, source addresses, logs, or status messages.
 
-## Releasing
+## Time and size limits
 
-`version` in `manifest.yaml` and the git tag must match (`v0.1.0` for
-`0.1.0`); `release_version_test.go` enforces both directions, including the
-placeholder-digest gate and the tag-filtered release workflow.
+Eshu gives each claim a deadline (the first lease expiry; heartbeat messages do not extend it) and stops the process there. The collector stops starting new registry calls shortly before the deadline (the smaller of 2 seconds or 5% of the time left) and returns `retryable` with failure class `claim_deadline_exceeded` and no facts, so it ends with a clear result instead of being stopped mid-request.
 
-The release workflow refuses to publish a version release unless the tag
-points at the protected `main` head, so a `v*` tag cut from any other commit
-publishes nothing. Merge the change to `main`, then tag that head.
+Size caps live under `limits`: `max_records_per_claim`, `max_payload_bytes` (one fact), `max_result_bytes` (the whole result), and `claim_timeout_seconds` (the `camelCase` spellings the host sends also work). Every field is optional; a missing or non-positive value falls back to the top-level limits, then to built-in defaults. A repository with many tags can pass the host's default 4 MiB output cap, so raise `process.stdout_limit_bytes` and `limits.max_result_bytes` together. The collector fails with `result_budget_exceeded` rather than let the host drop an oversized result.
 
-Every push to `main` also publishes the image tagged `:main`, `:latest`
-(moving), and `:sha-<long-sha>`, hardened with the same provenance, cosign,
-SBOM, and attestation verification steps as tag releases.
+## What operators see
 
-## Build and test
+Today the host passes one thing from each result to the work item: the failure class, such as `registry_rate_limited`, `invalid_config`, or `claim_deadline_exceeded`. The collector fills in source wait time, fact counts, and `retry_after_seconds` (the wait it asks for before a retry), but the worker does not record or honor them yet, so no dashboard shows them. It also writes one JSON line per claim to standard error (stderr) — outcome, scope, failure class, step, HTTP status, and fact count, with no addresses, bodies, or secrets. The host keeps only the byte count and drops the text, so that line helps only in a local run (`collector --sdk-stdio < request.json`) or in tests. This collector emits no metrics or spans of its own: the manifest declares the prefix `eshu_dp_oci_registry_collector_`, but nothing emits under it yet.
+
+## Keeping the same identity when you switch
+
+If this collector replaces Eshu's built-in OCI registry collector for a repository, these setup values must match the old ones, or Eshu will treat the same repository as new data:
+
+| Setup value | Rule |
+| --- | --- |
+| `host.scope.id` | Must equal the old scope ID (`oci-registry://<registry>/<repository>`), or every stored key changes |
+| `host.scope.kind` | Must be `container_registry_repository` |
+| `host.sourceSystem` | Must be `oci_registry`, or the source label changes on every fact |
+| Claim generation ID | Reuse the old generation on retry, so a repeated delivery stays a no-op |
+
+Stored keys and fingerprints use the same method as the built-in collector (tests pin `internal/stableid` against values from the original), so the same inputs give the same keys. Run only one of the two collectors per repository.
+
+## Permission to publish facts
+
+All 7 fact kinds belong to Eshu core, so the host refuses them without a producer grant (written permission for this component to publish that kind). `grant.example.json` lists the 7 requests, each tied to this component and version and scoped to `oci_registry`; record them with `scripts/record-grants.sh` (it calls `eshu component grant`). Eshu core issues grants; this repository only ships the request.
+
+## Eshu dependencies
+
+Exact versions from `go.mod`. Do not substitute another SDK line.
+
+| Module | Version |
+| --- | --- |
+| Go | `1.26.10` |
+| `github.com/eshu-hq/eshu-sdk/collector` | `v0.2.0-rc.1` |
+| `github.com/eshu-hq/eshu-sdk/factschema` | `v0.1.0-rc.6` |
+| `github.com/aws/aws-sdk-go-v2` (+ `config`, `service/ecr`) | `v1.47.4` (ECR login only) |
+| `gopkg.in/yaml.v3` | `v3.0.1` |
+
+The component ID is `dev.eshu.collector.oci-registry`, version `0.1.0`. It declares support for Eshu core `>=0.0.5 <0.2.0`, speaks `collector-sdk/v1alpha1` over the process adapter, and uses collector kind `oci_registry` (see `manifest.yaml`).
+
+## What it never does
+
+- It never pushes, tags, or deletes anything in a registry, and it never stores anything itself — the host validates and commits.
+- It never imports Eshu core internals or another collector; `boundary_test.go` fails the build if that changes. Beyond the SDK it uses only the standard library, the AWS SDK for ECR logins, and YAML parsing in tests.
+- It never puts secrets, credential-bearing addresses, or unapproved labels and annotations into facts, logs, or status messages.
+
+Four small files (`internal/stableid`, `internal/httpx`, `internal/regfail`, `oci/urlauthority.go`) copy Eshu core helpers a standalone repo cannot import yet. Each file says what it copies; they will be replaced when the shared SDK helpers are published.
+
+## Build, test, and release
 
 ```bash
 go build ./...
 go test ./...
 go test -race ./oci/... .
+make ci   # lint + test + race; the full local check CI runs
 ```
 
-`make ci` runs the lint, test, and race lanes CI runs
-(`.github/workflows/ci.yml`; the reusable `go-ci / ci-complete` check
-aggregates the lanes). See `CONTRIBUTING.md` for the lane contract.
+See `CONTRIBUTING.md` for the lane contract (`.github/workflows/ci.yml`, reported as `go-ci / ci-complete`). For releases, `metadata.version` in `manifest.yaml` and the git tag must match (`v0.1.0` for `0.1.0`); tests enforce this in both directions, including the placeholder-digest rule. The release workflow (`.github/workflows/release.yml`) publishes only when a version tag points at the protected `main` head — merge first, then tag that head. Every push to `main` also publishes the moving `:main`, `:latest`, and `:sha-<long-sha>` image tags, with the same provenance, cosign signing, SBOM, and attestation checks as a version release. Pin real deployments to digests, not moving tags.
 
-`boundary_test.go` fails the build on any import of Eshu internals or another
-collector: this module may only use the published SDK modules, the AWS SDK
-for ECR credential minting, yaml for manifest shape tests, and itself.
+## Docs and related projects
 
-## Copied code
+- `config.example.yaml` — full setup example; `manifest.yaml` — identity, fact list, and core range; `grant.example.json` — the 7 grant requests.
+- [Eshu core](https://github.com/eshu-hq/eshu) — the host that runs this collector.
+- [eshu-sdk](https://github.com/eshu-hq/eshu-sdk) — the SDK modules pinned above. [eshu-deploy](https://github.com/eshu-hq/eshu-deploy) — deployment examples and reference setups.
 
-`internal/stableid`, `internal/httpx`, `internal/regfail`, and
-`oci/urlauthority.go` are copies of Eshu core functions that are not
-importable from a standalone collector; each file says what it copies and
-names the SDK helper that should replace it when published
-(`eshu-hq/eshu#8851`).
+## Contributing
+
+See `CONTRIBUTING.md`. In short: run `make ci` before pushing, keep credentials in environment-variable references only, and never weaken the parity, hostile-input, or boundary tests to land a change.
+
+## License
+
+MIT. See `LICENSE`.
