@@ -85,7 +85,7 @@ the SDK repo shows up as a related repo in the README.
 
 | Module | Version |
 | --- | --- |
-| Go | `1.26.10` |
+| Go | `1.26.11` |
 | `github.com/eshu-hq/eshu-sdk/collector` | `v0.2.0-rc.1` |
 | `github.com/eshu-hq/eshu-sdk/factschema` | `v0.1.0-rc.6` |
 | `github.com/aws/aws-sdk-go-v2` (+ `config`, `service/ecr`) | `v1.47.4` (ECR login only) |
