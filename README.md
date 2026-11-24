@@ -64,10 +64,12 @@ The host checks the result and owns claims and commits.
 - [eshu-deploy](https://github.com/eshu-hq/eshu-deploy) is related
   reading for deployment examples. It isn't a build dependency, and
   nothing in this tree references it outside this list.
+- [Collector and Reducer Readiness](https://github.com/eshu-hq/eshu/blob/main/docs/public/reference/collector-reducer-readiness.md) and the 31-repo
+  [Repository Map](https://github.com/eshu-hq/eshu/blob/main/REPOSITORIES.md) in Eshu core.
 
 Exact pins live in [configuration](docs/reference/configuration.md). Short
-version: `github.com/eshu-hq/eshu-sdk/collector v0.2.0-rc.1` and
-`github.com/eshu-hq/eshu-sdk/factschema v0.1.0-rc.6`, on Go `1.26.10`.
+version: `github.com/eshu-hq/eshu-sdk/collector v0.2.0-rc.4` and
+`github.com/eshu-hq/eshu-sdk/factschema v0.1.0-rc.19`, on Go `1.26.11`.
 
 ## Development
 
